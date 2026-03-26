@@ -1,6 +1,8 @@
-from oxford_pet import OxfordPetDataset
-from src import DATASET_DIR
+import torch
 
-dataset = OxfordPetDataset(DATASET_DIR, "train")
+from models.unet import UNet
 
-dataset.__getitem__(0)
+model = UNet(in_channels=3, out_channels=2)
+x = torch.randn(1, 3, 256, 256)
+y = model(x)
+print(y.shape)
