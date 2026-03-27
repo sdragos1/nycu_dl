@@ -1,83 +1,106 @@
-from enum import Enum
 from pathlib import Path
+from typing import Callable, Optional
 
 import numpy as np
-import torch
 from PIL import Image
-from torch.utils.data import Dataset
-from torchvision.transforms import v2 as trans
-
-
-class TrimapClass(Enum):
-    FOREGROUND = 1,
-    BACKGROUND = 2,
-    UNCLASSIFIED = 3,
-
-
-class BinaryMask(Enum):
-    FOREGROUND = 1
-    BACKGROUND = 0
+from torch import Tensor
+from torch.utils.data import Dataset, DataLoader
 
 
 class OxfordPetDataset(Dataset):
-    def __init__(self, data_dir: Path, mode='train'):
-        super().__init__()
-        self._mode = mode
-        self._data_dir = data_dir
-        self._ann_dir = data_dir / "annotations"
-        self._images_dir = data_dir / "images"
-        self._mask_dir = self._ann_dir / "trimaps"
-        self._train_ann_file = self._ann_dir / "trainval.txt"
-        self._test_ann_file = self._ann_dir / "test.txt"
-        self._trans = self._get_transform()
+    _TRIMAP_FOREGROUND = 1
+    _TRIMAP_BACKGROUND = 2
+    _TRIMAP_UNCLASSIFIED = 3
 
-        self._split_filenames = self._read_split_filenames()
-        print(self._split_filenames)
+    _BINARY_FOREGROUND = 1
+    _BINARY_BACKGROUND = 0
 
-    def __len__(self):
-        return len(self._split_filenames)
+    def __init__(
+            self,
+            root: Path | str,
+            split: str = "train",
+            transform: Optional[Callable] = None
+    ):
+        if split not in ("train", "val", "test"):
+            raise ValueError(f"split must be 'train', 'val', or 'test', got {split}")
 
-    def __getitem__(self, idx) -> tuple[torch.Tensor, torch.Tensor]:
-        image_ph = self._get_image_path(self._split_filenames[idx])
-        mask_ph = self._get_mask_path(self._split_filenames[idx])
-        img = Image.open(image_ph).convert("RGB")
-        mask = Image.open(mask_ph)
+        self.root = Path(root)
+        self.split = split
+        self.transform = transform
+
+        self.images_dir = self.root / "images"
+        self.masks_dir = self.root / "annotations" / "trimaps"
+        self.split_file = self.root / "annotations" / f"{split}.txt"
+
+        self.filenames = self._load_split_filenames()
+
+    def __len__(self) -> int:
+        return len(self.filenames)
+
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+        filename = self.filenames[idx]
+        image_path = self.images_dir / f"{filename}.jpg"
+        mask_path = self.masks_dir / f"{filename}.png"
+
+        image = Image.open(image_path).convert("RGB")
+        mask = Image.open(mask_path)
+
         mask = np.array(mask)
-        mask[mask != TrimapClass.FOREGROUND.value] = BinaryMask.BACKGROUND.value
-        img, mask = self._trans(img, mask)
+        mask = np.where(
+            mask == self._TRIMAP_FOREGROUND,
+            self._BINARY_FOREGROUND,
+            self._BINARY_BACKGROUND,
+        ).astype(np.uint8)
+        if self.transform is not None:
+            image, mask = self.transform(image, mask)
         mask = mask.squeeze(0).long()
-        return img, mask
+        return image, mask
 
-    def _read_split_filenames(self) -> list[str]:
-        split_ann_file = self._train_ann_file if self._mode == "train" else self._test_ann_file
-        with open(split_ann_file, "r") as f:
+    def _load_split_filenames(self) -> list[str]:
+        if not self.split_file.exists():
+            raise FileNotFoundError(f"Split file not found: {self.split_file}")
+
+        with open(self.split_file) as f:
             lines = f.readlines()
-        filenames = [f"{line.split(" ")[0]}" for line in lines]
+
+        filenames = [line.split()[0] for line in lines]
         return filenames
 
-    def _get_image_path(self, filename):
-        return self._images_dir / f"{filename}.jpg"
 
-    def _get_mask_path(self, filename):
-        return self._mask_dir / f"{filename}.png"
+def get_train_val_dataloaders(
+        root: Path | str = "./dataset/oxford-iiit-pet",
+        batch_size: int = 32,
+        num_workers: int = 4,
+        train_transform: Optional[Callable] = None,
+        val_transform: Optional[Callable] = None,
+) -> tuple[DataLoader, DataLoader]:
+    train_dataset = OxfordPetDataset(
+        root, split="train", transform=train_transform
+    )
+    val_dataset = OxfordPetDataset(
+        root, split="val", transform=val_transform
+    )
 
-    @staticmethod
-    def _training_transform() -> trans.Compose:
-        return trans.Compose([
-            trans.ToImage(),
-            trans.ToDtype(torch.float32, scale=True),
-            trans.RandomHorizontalFlip(p=0.5),
-            trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
-        ])
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True
+    )
 
-    @staticmethod
-    def _test_transform() -> trans.Compose:
-        return trans.Compose([
-            trans.ToImage(),
-            trans.ToDtype(torch.float32, scale=True),
-        ])
+    return train_loader, val_loader
 
-    def _get_transform(self) -> trans.Compose:
-        if self._mode == "train":
-            return self._training_transform()
-        return self._test_transform()
+
+def get_test_dataloader(
+        root: Path | str = "./dataset/oxford-iiit-pet",
+        batch_size: int = 1,
+        num_workers: int = 2,
+        transform: Optional[Callable] = None,
+) -> DataLoader:
+    test_dataset = OxfordPetDataset(
+        root, split="test", transform=transform
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+    )
+    return test_loader

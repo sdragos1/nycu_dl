@@ -71,4 +71,5 @@ class UNet(nn.Module):
         for decoder in self._decoder:
             skip = skip_features.pop()
             x = decoder(x, skip)
-        return self._output(x)
+        x = self._output(x)
+        return x
