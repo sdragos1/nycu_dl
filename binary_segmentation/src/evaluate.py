@@ -14,7 +14,7 @@ def evaluate(model: nn.Module, val_loader: DataLoader, criterion: Callable, devi
     running_dice_score = 0
     with torch.no_grad():
         for i, vdata in enumerate(val_loader):
-            images, masks = vdata
+            images, masks, _ = vdata
             images, masks = images.to(device), masks.to(device)
             pred_mask = model(images)
             loss = criterion(pred_mask, masks)

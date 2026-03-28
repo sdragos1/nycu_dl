@@ -13,6 +13,7 @@ from constants import DATASET_DIR, SAVED_MODELS_DIR
 from evaluate import evaluate
 from models import get_model
 from oxford_pet import get_train_val_dataloaders
+from utils import dice_loss_criterion
 
 
 def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
@@ -23,17 +24,20 @@ def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
 def get_transforms() -> tuple[trans.Compose, trans.Compose]:
     train_transform = trans.Compose([
         trans.ToImage(),
-        trans.ToDtype({tv_tensors.Image: torch.float32}, scale=True),  # scale image pixels to [0, 1]
-        trans.ToDtype({tv_tensors.Mask: torch.float32}, scale=False),  # cast mask {0,1} without scaling
+        trans.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
+        trans.ToDtype({tv_tensors.Mask: torch.float32, "others": None}, scale=False),
         trans.RandomHorizontalFlip(p=0.5),
         trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
+        trans.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
+        trans.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
     ])
 
     val_transform = trans.Compose([
         trans.ToImage(),
-        trans.ToDtype({tv_tensors.Image: torch.float32}, scale=True),  # scale image pixels to [0, 1]
-        trans.ToDtype({tv_tensors.Mask: torch.float32}, scale=False),  # cast mask {0,1} without scaling
+        trans.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
+        trans.ToDtype({tv_tensors.Mask: torch.float32, "others": None}, scale=False),
         trans.Resize((256, 256)),
+        trans.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
     ])
 
     return train_transform, val_transform
@@ -48,14 +52,17 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
 
     model.train()
     for i, data in enumerate(train_loader):
-        images, masks = data
+        images, masks, _ = data
         images = images.to(device)
         masks = masks.to(device)
 
         optimizer.zero_grad()
 
         pred_masks = model(images)
-        loss = criterion(pred_masks, masks)
+        bce = criterion(pred_masks, masks)
+        dice_loss = dice_loss_criterion(pred_masks, masks)
+
+        loss = bce + dice_loss
         loss.backward()
 
         optimizer.step()
@@ -83,6 +90,7 @@ def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
     )
 
     model = get_model("unet", out_channels=1)
+    model = torch.compile(model)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
@@ -103,4 +111,4 @@ def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
 
 
 if __name__ == "__main__":
-    train(5, 16, 'cuda', 0.003)
+    train(1, 16, 'cuda', 1e-3)

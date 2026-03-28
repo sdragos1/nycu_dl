@@ -4,9 +4,9 @@ import os
 import numpy as np
 import torch
 
+from constants import DATASET_DIR, INFERENCE_DIR
 from oxford_pet import get_test_dataloader
-from constants import DATASET_DIR
-from utils import dice_score
+from utils import dice_score, rle_encode
 
 
 def inference(model_path: str, device: str, batch_size: int):
@@ -18,17 +18,23 @@ def inference(model_path: str, device: str, batch_size: int):
     model.to(device)
 
     scores = []
-    inf_row: tuple[str, str]
+    inf = list[tuple[str, str]]
 
     for i, data in enumerate(test_loader):
-        images, masks = data
+        images, masks, image_ids = data
         images = images.to(device)
         masks = masks.to(device)
+        inf_row = (image_ids, rle_encode(masks))
+        inf.append(inf_row)
 
         preds = model(images)
         score = dice_score(preds, masks)
         scores.append(score)
     print("Scores: ", np.mean(scores))
+
+    model_name = model_path.split('/')[-1]
+    with open(INFERENCE_DIR / f"inference_{model_name}.csv", 'r') as f:
+        f.write('image_id,encoded_mask')
 
 
 def parse_args():

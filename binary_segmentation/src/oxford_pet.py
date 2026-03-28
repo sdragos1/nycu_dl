@@ -38,10 +38,10 @@ class OxfordPetDataset(Dataset):
     def __len__(self) -> int:
         return len(self.filenames)
 
-    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
-        filename = self.filenames[idx]
-        image_path = self.images_dir / f"{filename}.jpg"
-        mask_path = self.masks_dir / f"{filename}.png"
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor, str]:
+        image_id = self.filenames[idx]
+        image_path = self.images_dir / f"{image_id}.jpg"
+        mask_path = self.masks_dir / f"{image_id}.png"
 
         image = Image.open(image_path).convert("RGB")
         mask = Image.open(mask_path)
@@ -56,7 +56,7 @@ class OxfordPetDataset(Dataset):
         if self.transform is not None:
             image, mask = self.transform(image, mask)
         mask = mask.unsqueeze(0)
-        return image, mask
+        return image, mask, image_id
 
     def _load_split_filenames(self) -> list[str]:
         if not self.split_file.exists():
@@ -72,7 +72,7 @@ class OxfordPetDataset(Dataset):
 def get_train_val_dataloaders(
         root: Path | str = "./dataset/oxford-iiit-pet",
         batch_size: int = 32,
-        num_workers: int = 4,
+        num_workers: int = 8,
         train_transform: Optional[Callable] = None,
         val_transform: Optional[Callable] = None,
 ) -> tuple[DataLoader, DataLoader]:
@@ -84,10 +84,12 @@ def get_train_val_dataloaders(
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True,
+        persistent_workers=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True,
+        persistent_workers=True
     )
 
     return train_loader, val_loader
@@ -103,6 +105,7 @@ def get_test_dataloader(
         root, split="test", transform=transform
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+        test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True,
+        persistent_workers=True
     )
     return test_loader

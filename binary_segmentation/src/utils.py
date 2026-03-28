@@ -20,6 +20,19 @@ def dice_score(logits: Tensor,
     dice = (2.0 * intersection + eps) / (union + eps)
     return dice.mean()
 
+def dice_loss_criterion(logits: Tensor,
+                        targets: Tensor,
+                        eps: float = 1e-6) -> Tensor:
+    probs = torch.sigmoid(logits)
+
+    probs_flat = probs.view(probs.size(0), -1)
+    targets_flat = targets.view(targets.size(0), -1)
+
+    intersection = (probs_flat * targets_flat).sum(dim=1)
+    union = probs_flat.sum(dim=1) + targets_flat.sum(dim=1)
+
+    dice = (2.0 * intersection + eps) / (union + eps)
+    return 1.0 - dice.mean()
 
 def rle_encode(targets: np.ndarray) -> str:
     targets = targets.flatten(order="F").astype(np.uint8)
