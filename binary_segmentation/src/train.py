@@ -6,6 +6,7 @@ from torch import nn, optim
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import tv_tensors
 from torchvision.transforms import v2 as trans
 
 from constants import DATASET_DIR, SAVED_MODELS_DIR
@@ -20,21 +21,19 @@ def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
 
 
 def get_transforms() -> tuple[trans.Compose, trans.Compose]:
-    train_transform = trans.Compose(
-        [
-            trans.ToImage(),
-            trans.ToDtype(torch.float32, scale=True),
-            trans.RandomHorizontalFlip(p=0.5),
-            trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
-        ]
-    )
-    val_transform = trans.Compose(
-        [
-            trans.ToImage(),
-            trans.ToDtype(torch.float32, scale=True),
-            trans.Resize((256, 256)),
-        ]
-    )
+    train_transform = trans.Compose([
+        trans.ToImage(),
+        trans.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.int64}, scale=True),
+        trans.RandomHorizontalFlip(p=0.5),
+        trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
+    ])
+
+    val_transform = trans.Compose([
+        trans.ToImage(),
+        trans.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.int64}, scale=True),
+        trans.Resize((256, 256)),
+    ])
+
     return train_transform, val_transform
 
 

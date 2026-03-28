@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset, DataLoader
+from torchvision import tv_tensors
 
 
 class OxfordPetDataset(Dataset):
@@ -51,6 +52,7 @@ class OxfordPetDataset(Dataset):
             self._BINARY_FOREGROUND,
             self._BINARY_BACKGROUND,
         ).astype(np.uint8)
+        mask = tv_tensors.Mask(mask)
         if self.transform is not None:
             image, mask = self.transform(image, mask)
         mask = mask.squeeze(0).long()
