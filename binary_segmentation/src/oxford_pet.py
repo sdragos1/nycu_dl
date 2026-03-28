@@ -55,7 +55,7 @@ class OxfordPetDataset(Dataset):
         mask = tv_tensors.Mask(mask)
         if self.transform is not None:
             image, mask = self.transform(image, mask)
-        mask = mask.squeeze(0).long()
+        mask = mask.unsqueeze(0)
         return image, mask
 
     def _load_split_filenames(self) -> list[str]:

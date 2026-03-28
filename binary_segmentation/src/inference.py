@@ -18,6 +18,7 @@ def inference(model_path: str, device: str, batch_size: int):
     model.to(device)
 
     scores = []
+    inf_row: tuple[str, str]
 
     for i, data in enumerate(test_loader):
         images, masks = data

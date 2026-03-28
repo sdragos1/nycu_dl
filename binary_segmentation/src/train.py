@@ -23,14 +23,16 @@ def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
 def get_transforms() -> tuple[trans.Compose, trans.Compose]:
     train_transform = trans.Compose([
         trans.ToImage(),
-        trans.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.int64}, scale=True),
+        trans.ToDtype({tv_tensors.Image: torch.float32}, scale=True),  # scale image pixels to [0, 1]
+        trans.ToDtype({tv_tensors.Mask: torch.float32}, scale=False),  # cast mask {0,1} without scaling
         trans.RandomHorizontalFlip(p=0.5),
         trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
     ])
 
     val_transform = trans.Compose([
         trans.ToImage(),
-        trans.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.int64}, scale=True),
+        trans.ToDtype({tv_tensors.Image: torch.float32}, scale=True),  # scale image pixels to [0, 1]
+        trans.ToDtype({tv_tensors.Mask: torch.float32}, scale=False),  # cast mask {0,1} without scaling
         trans.Resize((256, 256)),
     ])
 
@@ -64,7 +66,7 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
             tb_x = epoch_index * len(train_loader) + i
             tb_writer.add_scalar('Loss/train', last_loss, tb_x)
             running_loss = 0.
-    return last_loss / len(train_loader)
+    return last_loss
 
 
 def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
@@ -80,10 +82,10 @@ def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
         val_transform=val_transform,
     )
 
-    model = get_model("unet")
+    model = get_model("unet", out_channels=1)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()
     best_val_loss: float = 1_000_000.
     best_dice_score: float = 0.
     for epoch in range(epochs):
