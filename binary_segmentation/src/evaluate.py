@@ -20,5 +20,9 @@ def evaluate(model: nn.Module, val_loader: DataLoader, criterion: Callable, devi
             loss = criterion(pred_mask, masks)
             running_vloss += loss.item()
             running_dice_score += dice_score(pred_mask, masks)
-    print(f"Val loss: {running_vloss} | Dice score: {running_dice_score}")
-    return running_vloss, running_dice_score
+    n = len(val_loader)
+    avg_vloss = running_vloss / n
+    avg_dice_score = running_dice_score / n
+
+    print("Validation: ", f"{avg_vloss:.4f}", " - ", f"{avg_dice_score:.4f}")
+    return running_vloss / n, running_dice_score / n
