@@ -61,7 +61,7 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
         running_loss += loss.item()
         if i % 10 == 0:
             last_loss = running_loss / 1000
-            print('  batch {} loss: {}'.format(i , last_loss))
+            print('  batch {} loss: {}'.format(i, last_loss))
             tb_x = epoch_index * len(train_loader) + i
             tb_writer.add_scalar('Loss/train', last_loss, tb_x)
             running_loss = 0.
@@ -86,13 +86,14 @@ def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     best_val_loss: float = 1_000_000.
+    best_dice_score: float = 1_000_000.
     for epoch in range(epochs):
         print('EPOCH {}:'.format(epoch + 1))
         running_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, device)
-        running_vloss = evaluate(model, val_loader, criterion, device)
+        running_vloss, running_dice = evaluate(model, val_loader, criterion, device)
 
-        if running_loss < best_val_loss:
-            best_val_loss = running_loss
+        if running_vloss < best_val_loss and running_dice < best_dice_score:
+            best_val_loss = running_vloss
             save_model(model, timestamp, epoch)
         avg_vloss = running_vloss / len(val_loader)
         avg_loss = running_loss / len(train_loader)
