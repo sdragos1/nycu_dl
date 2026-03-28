@@ -63,10 +63,23 @@ def inference(model_path: str, device: str, batch_size: int, split: str):
             score = dice_score(preds, masks)
             scores.append(score.item())
 
-            pred_masks = (torch.sigmoid(preds) > 0.5).to(torch.uint8).cpu().numpy()
-
             for idx, image_id in enumerate(image_ids):
-                encoded_mask = rle_encode(pred_masks[idx, 0])
+                orig_image_path = DATASET_DIR / "images" / f"{image_id}.jpg"
+                from PIL import Image
+                with Image.open(orig_image_path) as orig_img:
+                    orig_w, orig_h = orig_img.size
+                
+                pred_tensor = preds[idx : idx + 1]
+                pred_resized = torch.nn.functional.interpolate(
+                    pred_tensor, 
+                    size=(orig_h, orig_w), 
+                    mode='bilinear', 
+                    align_corners=False
+                )
+                
+                pred_mask = (torch.sigmoid(pred_resized) > 0.5).to(torch.uint8).cpu().numpy()[0, 0]
+
+                encoded_mask = rle_encode(pred_mask)
                 rows.append((image_id, encoded_mask))
 
     print("Scores: ", np.mean(scores))
