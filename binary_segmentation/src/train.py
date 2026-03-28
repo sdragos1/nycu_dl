@@ -23,9 +23,11 @@ def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
 def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, optimizer: Optimizer,
                 criterion: Callable,
                 train_loader: DataLoader,
-                device: str):
+                device: str,
+                scheduler=None):
     running_loss = 0.
     last_loss = 0.
+    epoch_loss = 0.0
 
     model.train()
     for i, data in enumerate(train_loader):
@@ -43,6 +45,9 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
         loss.backward()
 
         optimizer.step()
+        scheduler.step()
+
+        epoch_loss += loss.item()
         running_loss += loss.item()
         if i % 10 == 0:
             last_loss = running_loss / 10
@@ -50,7 +55,7 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
             tb_x = epoch_index * len(train_loader) + i
             tb_writer.add_scalar('Loss/train', last_loss, tb_x)
             running_loss = 0.
-    return last_loss
+    return epoch_loss / len(train_loader)
 
 
 def train(epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
@@ -68,17 +73,27 @@ def train(epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str
     model = torch.compile(model)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=lr,
+        steps_per_epoch=len(train_loader),
+        epochs=epochs
+    )
     criterion = nn.BCEWithLogitsLoss()
-    best_val_loss: float = 1_000_000.
     best_dice_score: float = 0.
     for epoch in range(epochs):
         print('EPOCH {}:'.format(epoch + 1))
-        avg_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, device)
+        avg_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, device, scheduler)
         avg_vloss, avg_dice = evaluate(model, val_loader, criterion, device)
 
-        if avg_vloss < best_val_loss and avg_dice > best_dice_score:
-            best_val_loss = avg_vloss
+        if avg_dice > best_dice_score:
+            best_dice_score = avg_dice
             save_model(model, timestamp, epoch)
+
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar('Learning Rate', current_lr, epoch + 1)
+
         writer.add_scalars('Training vs. Validation Loss',
                            {'Training': avg_loss, 'Validation': avg_vloss},
                            epoch + 1)

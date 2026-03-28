@@ -34,7 +34,10 @@ class UNetEncoderBlock(nn.Module):
 class UNetDecoderBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(UNetDecoderBlock, self).__init__()
-        self.upsample = nn.ConvTranspose2d(in_channels, out_channels, 2, 2)
+        self.upsample = self.upsample = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        )
         self.conv = DoubleConv(in_channels, out_channels, kernel_size=3)
 
     def forward(self, x: Tensor, skip: Tensor) -> Tensor:
