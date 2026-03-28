@@ -1,3 +1,4 @@
+import argparse
 from datetime import datetime
 from typing import Callable
 
@@ -6,8 +7,6 @@ from torch import nn, optim
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torchvision import tv_tensors
-from torchvision.transforms import v2 as trans
 
 from constants import DATASET_DIR, SAVED_MODELS_DIR
 from evaluate import evaluate
@@ -19,28 +18,6 @@ from utils import dice_loss_criterion
 def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
     model_path = SAVED_MODELS_DIR / f"bin_segm_{timestamp}_{epoch_idx}.pth"
     torch.save(model.state_dict(), model_path)
-
-
-def get_transforms() -> tuple[trans.Compose, trans.Compose]:
-    train_transform = trans.Compose([
-        trans.ToImage(),
-        trans.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
-        trans.ToDtype({tv_tensors.Mask: torch.float32, "others": None}, scale=False),
-        trans.RandomHorizontalFlip(p=0.5),
-        trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
-        trans.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
-        trans.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-    ])
-
-    val_transform = trans.Compose([
-        trans.ToImage(),
-        trans.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
-        trans.ToDtype({tv_tensors.Mask: torch.float32, "others": None}, scale=False),
-        trans.Resize((256, 256)),
-        trans.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-    ])
-
-    return train_transform, val_transform
 
 
 def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, optimizer: Optimizer,
@@ -76,17 +53,15 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
     return last_loss
 
 
-def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
+def train(epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     writer = SummaryWriter('runs/binary_segmentation_{}'.format(timestamp))
-
-    train_transform, val_transform = get_transforms()
 
     train_loader, val_loader = get_train_val_dataloaders(
         root=DATASET_DIR,
         batch_size=batch_size,
-        train_transform=train_transform,
-        val_transform=val_transform,
+        train_split=ts,
+        val_split=vs
     )
 
     model = get_model("unet", out_channels=1)
@@ -110,5 +85,19 @@ def train(epochs: int, batch_size: int, device: str, lr: float) -> None:
         writer.flush()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train binary segmentation model.")
+    parser.add_argument("-e", "--epochs", type=int, default=50, help="Number of epochs.")
+    parser.add_argument("-b", "--batch-size", type=int, default=16, help="Training batch size.")
+    parser.add_argument("-d", "--device", default="cuda", help="Device for training (e.g. cuda, cpu).")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument("--ts", type=str, default="./dataset/oxford-iiit-pet/annotations/train.txt",
+                        help="Path to train split file")
+    parser.add_argument("--vs", type=str, default="./dataset/oxford-iiit-pet/annotations/val.txt",
+                        help="Path to val split file")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    train(1, 16, 'cuda', 1e-3)
+    args = parse_args()
+    train(args.epochs, args.batch_size, args.device, args.lr, args.ts, args.vs)

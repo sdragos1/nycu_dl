@@ -218,3 +218,4 @@ __marimo__/
 dataset/oxford-iiit-pet/**
 runs/**
 saved_models/*.pth
+inference/**
