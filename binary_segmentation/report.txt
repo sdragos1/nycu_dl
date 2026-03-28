@@ -1,0 +1,35 @@
+# Technical Summary
+
+## Implementation Highlights
+This project was implemented in PyTorch with TensorBoard for experiment.
+The pipeline includes model definition, training/validation loops, and inference with CSV export.
+- Model: UNet & ResNet34
+- Loss: BCEWithLogitsLoss + Dice loss
+- Optimizer/Scheduler: Adam with OneCycleLR
+- Checkpointing: best model selected by validation Dice score
+
+## Data Preprocessing Strategy
+Data preprocessing was implemented with torchvision.transforms.v2.
+- Trimap masks were converted to binary masks by mapping foreground pixels to 1 and all others to 0.
+- Images were normalized using ImageNet statistics.
+- Training augmentation included RandomResizedCrop, RandomHorizontalFlip, RandomRotation, and ColorJitter.
+- Validation/test preprocessing used deterministic transforms only resize and normalization without augmentation.
+
+## Training Strategy
+Training used configurable split files for train/validation and mini-batch optimization.
+- 50 training epochs
+- Mixed monitoring through validation loss and Dice score
+- TensorBoard logging for training loss, validation loss, and learning rate
+- Training performed on an RTX 4070 (8GB VRAM)
+
+## Key Observations
+- BCE + Dice produced better quality than BCE or CE alone.
+- Selecting checkpoints by validation Dice produced models with better inference than selecting by validation loss only.
+- OneCycleLR improved convergence speed and training stability compared to plateau scheduling.
+
+## Model Comparisons
+
+## AI Usage
+AI assistance was used for lightweight boilerplate and iteration support:
+- argparse/CLI parameterization
+- workflow suggestions for training-speed and experiment setup
