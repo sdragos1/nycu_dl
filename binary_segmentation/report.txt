@@ -5,7 +5,7 @@ This project was implemented in PyTorch with TensorBoard for experiment.
 The pipeline includes model definition, training/validation loops, and inference with CSV export.
 - Model: UNet & ResNet34
 - Loss: BCEWithLogitsLoss + Dice loss
-- Optimizer/Scheduler: Adam with OneCycleLR
+- Optimizer/Scheduler: AdamW with OneCycleLR and weight decay
 - Checkpointing: best model selected by validation Dice score
 
 ## Data Preprocessing Strategy
@@ -21,6 +21,7 @@ Training used configurable split files for train/validation and mini-batch optim
 - Mixed monitoring through validation loss and Dice score
 - TensorBoard logging for training loss, validation loss, and learning rate
 - Training performed on an RTX 4070 (8GB VRAM)
+- Usage of GradScaler to convert floats to f16 reducing memory but still keeping gradients correct.
 
 ## Key Observations
 - BCE + Dice produced better quality than BCE or CE alone.
@@ -28,6 +29,8 @@ Training used configurable split files for train/validation and mini-batch optim
 - OneCycleLR improved convergence speed and training stability compared to plateau scheduling.
 
 ## Model Comparisons
+- ResNet32 training is much faster than UNet.
+- UNet is used primarily for segmentation where ResNet is more for classification.
 
 ## AI Usage
 AI assistance was used for lightweight boilerplate and iteration support:

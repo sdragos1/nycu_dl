@@ -73,9 +73,12 @@ default_train_transform = trans.Compose([
     trans.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
     trans.ToDtype({tv_tensors.Mask: torch.float32, "others": None}, scale=False),
     trans.RandomHorizontalFlip(p=0.5),
-    trans.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.0)),
-    trans.RandomAffine(degrees=20, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10),
+    trans.RandomResizedCrop(size=(384, 384), scale=(0.8, 1.0), antialias=True),
+    trans.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10),
     trans.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+    trans.RandomApply([trans.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5.0))], p=0.2),
+    trans.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
+    trans.RandomAutocontrast(p=0.2),
     trans.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
 ])
 
@@ -83,7 +86,7 @@ default_val_transform = trans.Compose([
     trans.ToImage(),
     trans.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
     trans.ToDtype({tv_tensors.Mask: torch.float32, "others": None}, scale=False),
-    trans.Resize((256, 256)),
+    trans.Resize((384, 384), antialias=True),
     trans.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
 ])
 
@@ -93,7 +96,7 @@ def get_train_val_dataloaders(
         train_split: Path | str = "./dataset/oxford-iiit-pet/annotations/train.txt",
         val_split: Path | str = "./dataset/oxford-iiit-pet/annotations/val.txt",
         batch_size: int = 32,
-        num_workers: int = 8,
+        num_workers: int = 2,
         train_transform: Optional[Callable] = default_train_transform,
         val_transform: Optional[Callable] = default_val_transform,
 ) -> tuple[DataLoader, DataLoader]:

@@ -5,6 +5,7 @@ from typing import Callable
 import torch
 from torch import nn, optim
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
@@ -23,9 +24,9 @@ def save_model(model_name: str, model: nn.Module, timestamp: str, epoch_idx: int
 def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, optimizer: Optimizer,
                 criterion: Callable,
                 train_loader: DataLoader,
+                scheduler: OneCycleLR,
                 device: str,
-                scaler: torch.cuda.amp.GradScaler,
-                scheduler=None):
+                scaler: torch.amp.GradScaler):
     running_loss = 0.
     last_loss = 0.
     epoch_loss = 0.0
@@ -36,18 +37,19 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
         images = images.to(device)
         masks = masks.to(device)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
-        pred_masks = model(images)
-        bce = criterion(pred_masks, masks)
-        dice_loss = dice_loss_criterion(pred_masks, masks)
+        device_type = "cuda" if "cuda" in device else "cpu"
+        with torch.autocast(device_type=device_type, enabled=device_type == "cuda"):
+            pred_masks = model(images)
+            bce = criterion(pred_masks, masks)
+            dice_loss = dice_loss_criterion(pred_masks, masks)
+            loss = bce + dice_loss
 
-        loss = bce + dice_loss
         scaler.scale(loss).backward()
-        
         scaler.step(optimizer)
         scaler.update()
-        
+
         if scheduler is not None:
             scheduler.step()
 
@@ -62,12 +64,14 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
     return epoch_loss / len(train_loader)
 
 
-def train(model_name: str, epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
+def train(dataset: str, model_name: str, epochs: int, batch_size: int, device: str, lr: float, ts: str,
+          vs: str) -> None:
+    torch.backends.cudnn.benchmark = True
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     writer = SummaryWriter(f'runs/bin_segm_{model_name}_{timestamp}')
 
     train_loader, val_loader = get_train_val_dataloaders(
-        root=DATASET_DIR,
+        root=dataset,
         batch_size=batch_size,
         train_split=ts,
         val_split=vs
@@ -80,8 +84,7 @@ def train(model_name: str, epochs: int, batch_size: int, device: str, lr: float,
         except Exception as e:
             print(f"Warning: torch.compile failed or is not available: {e}")
 
-    optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=1e-4, momentum=0.99)
-    scaler = torch.cuda.amp.GradScaler(enabled="cuda" in str(device))
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=lr,
@@ -90,10 +93,11 @@ def train(model_name: str, epochs: int, batch_size: int, device: str, lr: float,
     )
     criterion = nn.BCEWithLogitsLoss()
     best_dice_score: float = 0.
+    scaler = torch.amp.GradScaler(enabled=("cuda" in device))
     for epoch in range(epochs):
         print('EPOCH {}:'.format(epoch + 1))
-        avg_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, device, scaler, scheduler)
-        
+        avg_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, scheduler, device, scaler)
+
         avg_vloss, avg_dice = evaluate(model, val_loader, criterion, device)
 
         if avg_dice > best_dice_score:
@@ -115,6 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-b", "--batch-size", type=int, default=16, help="Training batch size.")
     parser.add_argument("-d", "--device", default="cuda", help="Device for training (e.g. cuda, cpu).")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument('--dataset', type=str, default=DATASET_DIR, help="Path to dataset.")
     parser.add_argument("--ts", type=str, default="./dataset/oxford-iiit-pet/annotations/train.txt",
                         help="Path to train split file")
     parser.add_argument("--vs", type=str, default="./dataset/oxford-iiit-pet/annotations/val.txt",
@@ -125,4 +130,4 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    train(args.model, args.epochs, args.batch_size, args.device, args.lr, args.ts, args.vs)
+    train(args.dataset, args.model, args.epochs, args.batch_size, args.device, args.lr, args.ts, args.vs)

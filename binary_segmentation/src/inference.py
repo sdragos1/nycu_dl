@@ -43,11 +43,11 @@ def _load_model(model_name: str, model_path: str, device: str) -> nn.Module:
     return model
 
 
-def inference(model_name: str, model_path: str, device: str, batch_size: int, split: str):
+def inference(dataset: str, model_name: str, model_path: str, device: str, batch_size: int, split: str):
     if not os.path.exists(model_path):
         raise FileNotFoundError
 
-    test_loader = get_test_dataloader(DATASET_DIR, split, batch_size)
+    test_loader = get_test_dataloader(dataset, split, batch_size)
     model = _load_model(model_name, model_path, device)
 
     scores = []
@@ -136,9 +136,10 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_TEST_SPLIT_FILE),
         help="Path to split txt file listing test image ids.",
     )
+    parser.add_argument('--dataset', type=str, default=DATASET_DIR, help="Path to dataset.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    inference(args.model, args.model_path, args.device, args.batch_size, args.split_file_path)
+    inference(args.dataset, args.model, args.model_path, args.device, args.batch_size, args.split_file_path)
