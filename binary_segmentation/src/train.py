@@ -58,9 +58,9 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
     return epoch_loss / len(train_loader)
 
 
-def train(epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
+def train(model: str, epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    writer = SummaryWriter('runs/binary_segmentation_{}'.format(timestamp))
+    writer = SummaryWriter(f'runs/bin_segm_{model}_{timestamp}')
 
     train_loader, val_loader = get_train_val_dataloaders(
         root=DATASET_DIR,
@@ -69,9 +69,7 @@ def train(epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str
         val_split=vs
     )
 
-    model = get_model("unet", out_channels=1)
-    model = torch.compile(model)
-    model.to(device)
+    model = get_model(model, out_channels=1).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     scheduler = optim.lr_scheduler.OneCycleLR(
@@ -110,9 +108,10 @@ def parse_args() -> argparse.Namespace:
                         help="Path to train split file")
     parser.add_argument("--vs", type=str, default="./dataset/oxford-iiit-pet/annotations/val.txt",
                         help="Path to val split file")
+    parser.add_argument("--model", type=str, default="unet", help="Model to train.", choices=["unet", "resnet"])
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    train(args.epochs, args.batch_size, args.device, args.lr, args.ts, args.vs)
+    train(args.model, args.epochs, args.batch_size, args.device, args.lr, args.ts, args.vs)
