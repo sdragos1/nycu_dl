@@ -24,6 +24,7 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
                 criterion: Callable,
                 train_loader: DataLoader,
                 device: str,
+                scaler: torch.cuda.amp.GradScaler,
                 scheduler=None):
     running_loss = 0.
     last_loss = 0.
@@ -42,10 +43,13 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
         dice_loss = dice_loss_criterion(pred_masks, masks)
 
         loss = bce + dice_loss
-        loss.backward()
-
-        optimizer.step()
-        scheduler.step()
+        scaler.scale(loss).backward()
+        
+        scaler.step(optimizer)
+        scaler.update()
+        
+        if scheduler is not None:
+            scheduler.step()
 
         epoch_loss += loss.item()
         running_loss += loss.item()
@@ -70,8 +74,14 @@ def train(model_name: str, epochs: int, batch_size: int, device: str, lr: float,
     )
 
     model = get_model(model_name, out_channels=1).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    if hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model)
+        except Exception as e:
+            print(f"Warning: torch.compile failed or is not available: {e}")
 
+    optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=1e-4, momentum=0.99)
+    scaler = torch.cuda.amp.GradScaler(enabled="cuda" in str(device))
     scheduler = optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=lr,
@@ -82,7 +92,8 @@ def train(model_name: str, epochs: int, batch_size: int, device: str, lr: float,
     best_dice_score: float = 0.
     for epoch in range(epochs):
         print('EPOCH {}:'.format(epoch + 1))
-        avg_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, device, scheduler)
+        avg_loss = train_epoch(writer, epoch, model, optimizer, criterion, train_loader, device, scaler, scheduler)
+        
         avg_vloss, avg_dice = evaluate(model, val_loader, criterion, device)
 
         if avg_dice > best_dice_score:
