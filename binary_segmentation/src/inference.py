@@ -14,13 +14,13 @@ from utils import dice_score, rle_encode
 DEFAULT_TEST_SPLIT_FILE = DATASET_DIR / "annotations" / "test.txt"
 
 
-def _load_model(model_path: str, device: str) -> nn.Module:
+def _load_model(model_name: str, model_path: str, device: str) -> nn.Module:
     ckpt = torch.load(model_path, map_location=device)
 
     if isinstance(ckpt, nn.Module):
         model = ckpt
     else:
-        model = get_model("unet", out_channels=1)
+        model = get_model(model_name, out_channels=1)
         if model is None:
             raise ValueError("Failed to initialize model")
 
@@ -43,12 +43,12 @@ def _load_model(model_path: str, device: str) -> nn.Module:
     return model
 
 
-def inference(model_path: str, device: str, batch_size: int, split: str):
+def inference(model_name: str, model_path: str, device: str, batch_size: int, split: str):
     if not os.path.exists(model_path):
         raise FileNotFoundError
 
     test_loader = get_test_dataloader(DATASET_DIR, split, batch_size)
-    model = _load_model(model_path, device)
+    model = _load_model(model_name, model_path, device)
 
     scores = []
     rows: list[tuple[str, str]] = []
@@ -68,15 +68,15 @@ def inference(model_path: str, device: str, batch_size: int, split: str):
                 from PIL import Image
                 with Image.open(orig_image_path) as orig_img:
                     orig_w, orig_h = orig_img.size
-                
-                pred_tensor = preds[idx : idx + 1]
+
+                pred_tensor = preds[idx: idx + 1]
                 pred_resized = torch.nn.functional.interpolate(
-                    pred_tensor, 
-                    size=(orig_h, orig_w), 
-                    mode='bilinear', 
+                    pred_tensor,
+                    size=(orig_h, orig_w),
+                    mode='bilinear',
                     align_corners=False
                 )
-                
+
                 pred_mask = (torch.sigmoid(pred_resized) > 0.5).to(torch.uint8).cpu().numpy()[0, 0]
 
                 encoded_mask = rle_encode(pred_mask)
@@ -102,6 +102,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "-m",
+        "--model",
+        required=True,
+        default="unet",
+        type=str,
+        help="The model to run inference on.",
+        choices=["unet", "resnet"]
+    )
+    parser.add_argument(
+        "-p",
         "--model-path",
         dest="model_path",
         required=True,
@@ -132,4 +141,4 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    inference(args.model_path, args.device, args.batch_size, args.split_file_path)
+    inference(args.model, args.model_path, args.device, args.batch_size, args.split_file_path)

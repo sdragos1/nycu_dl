@@ -15,8 +15,8 @@ from oxford_pet import get_train_val_dataloaders
 from utils import dice_loss_criterion
 
 
-def save_model(model: nn.Module, timestamp: str, epoch_idx: int) -> None:
-    model_path = SAVED_MODELS_DIR / f"bin_segm_{timestamp}_{epoch_idx}.pth"
+def save_model(model_name: str, model: nn.Module, timestamp: str, epoch_idx: int) -> None:
+    model_path = SAVED_MODELS_DIR / f"bin_segm_{model_name}_{timestamp}_{epoch_idx}.pth"
     torch.save(model.state_dict(), model_path)
 
 
@@ -58,9 +58,9 @@ def train_epoch(tb_writer: SummaryWriter, epoch_index: int, model: nn.Module, op
     return epoch_loss / len(train_loader)
 
 
-def train(model: str, epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
+def train(model_name: str, epochs: int, batch_size: int, device: str, lr: float, ts: str, vs: str) -> None:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    writer = SummaryWriter(f'runs/bin_segm_{model}_{timestamp}')
+    writer = SummaryWriter(f'runs/bin_segm_{model_name}_{timestamp}')
 
     train_loader, val_loader = get_train_val_dataloaders(
         root=DATASET_DIR,
@@ -69,7 +69,7 @@ def train(model: str, epochs: int, batch_size: int, device: str, lr: float, ts: 
         val_split=vs
     )
 
-    model = get_model(model, out_channels=1).to(device)
+    model = get_model(model_name, out_channels=1).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     scheduler = optim.lr_scheduler.OneCycleLR(
@@ -87,7 +87,7 @@ def train(model: str, epochs: int, batch_size: int, device: str, lr: float, ts: 
 
         if avg_dice > best_dice_score:
             best_dice_score = avg_dice
-            save_model(model, timestamp, epoch)
+            save_model(model_name, model, timestamp, epoch)
 
         current_lr = optimizer.param_groups[0]['lr']
         writer.add_scalar('Learning Rate', current_lr, epoch + 1)
