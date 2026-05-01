@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import sys
 
 import ale_py
 import gymnasium as gym
@@ -9,8 +10,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from torch.nn import MSELoss
 
-from src.preprocessor import AtariPreprocessor
 from src.replay import ReplayBuffer
 
 CARTPOLE_BEST_REWARD = 0
@@ -23,6 +24,7 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(seed)
+
 
 def init_weights(m):
     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
@@ -42,11 +44,11 @@ class DQN(nn.Module):
     def __init__(self, input_dim, num_actions):
         super(DQN, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, 64),
+            nn.Linear(input_dim, 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, num_actions)
+            nn.Linear(128, num_actions)
         )
 
     def forward(self, x):
@@ -60,6 +62,9 @@ class DQNAgent:
         self.input_dim = self.env.observation_space.shape[0]
         self.num_actions = self.env.action_space.n
 
+        self.env.observation_space.seed(seed=seed)
+        self.env.action_space.seed(seed=seed)
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
@@ -69,6 +74,7 @@ class DQNAgent:
         self.target_net = DQN(self.input_dim, self.num_actions).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
+        self.criterion = MSELoss()
 
         self.batch_size = args.batch_size
         self.gamma = args.discount_factor
@@ -96,7 +102,7 @@ class DQNAgent:
 
     def run(self, episodes=1000):
         for ep in range(episodes):
-            state, _ = self.env.reset()
+            state, _ = self.env.reset(seed=seed + ep)
 
             done = False
             total_reward = 0
@@ -107,7 +113,6 @@ class DQNAgent:
                 next_state, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
 
-                next_state = next_state
                 self.memory.append((state, action, reward, next_state, done))
 
                 for _ in range(self.train_per_step):
@@ -174,56 +179,57 @@ class DQNAgent:
         return total_reward
 
     def train(self):
-
         if len(self.memory) < self.replay_start_size:
             return
 
-            # Decay function for epsilin-greedy exploration
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
 
-        ########## YOUR CODE HERE (<5 lines) ##########
-        # Sample a mini-batch of (s,a,r,s',done) from the replay buffer
+        (states, actions, rewards, next_states, dones) = self.memory.sample(self.batch_size)
 
-        ########## END OF YOUR CODE ##########
+        states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
+        next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
+        actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+        dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
+        q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+        target_values = self.target_net(next_states).max(1)[0]
 
-        # Convert the states, actions, rewards, next_states, and dones into torch tensors
-        # NOTE: Enable this part after you finish the mini-batch sampling
-        # states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
-        # next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
-        # actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
-        # rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        # dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
-        # q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-
-        ########## YOUR CODE HERE (~10 lines) ##########
-        # Implement the loss function of DQN and the gradient updates
-
-        ########## END OF YOUR CODE ##########
+        y = rewards + self.gamma * target_values * (1 - dones)
+        loss = self.criterion(q_values, y)
+        self.optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.optimizer.step()
 
         if self.train_count % self.target_update_frequency == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
 
-        # NOTE: Enable this part if "loss" is defined
-        # if self.train_count % 1000 == 0:
-        #    print(f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
+        if self.train_count % 1000 == 0:
+            print(
+                f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
+            wandb.log(
+                {
+                    "Loss": loss.item(),
+                    "Train": self.train_count,
+                }
+            )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-dir", type=str, default="./results")
     parser.add_argument("--wandb-run-name", type=str, default="cartpole-run")
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--memory-size", type=int, default=100000)
-    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--memory-size", type=int, default=50000)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
-    parser.add_argument("--epsilon-decay", type=float, default=0.999999)
-    parser.add_argument("--epsilon-min", type=float, default=0.05)
-    parser.add_argument("--target-update-frequency", type=int, default=1000)
-    parser.add_argument("--replay-start-size", type=int, default=50000)
-    parser.add_argument("--max-episode-steps", type=int, default=10000)
+    parser.add_argument("--epsilon-decay", type=float, default=0.9997)
+    parser.add_argument("--epsilon-min", type=float, default=0.01)
+    parser.add_argument("--target-update-frequency", type=int, default=500)
+    parser.add_argument("--replay-start-size", type=int, default=1000)
+    parser.add_argument("--max-episode-steps", type=int, default=500)
     parser.add_argument("--train-per-step", type=int, default=1)
     args = parser.parse_args()
 
