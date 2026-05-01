@@ -1,15 +1,14 @@
+import argparse
+import os
+import random
+
+import gymnasium as gym
+import imageio
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-import random
-import gymnasium as gym
-import cv2
-import imageio
-import ale_py
-import os
-from collections import deque
-import argparse
+from preprocessor import AtariPreprocessor
+
 
 class DQN(nn.Module):
     def __init__(self, input_channels, num_actions):
@@ -29,30 +28,8 @@ class DQN(nn.Module):
 
     def forward(self, x):
         return self.network(x / 255.0)
-class AtariPreprocessor:
-    def __init__(self, frame_stack=4):
-        self.frame_stack = frame_stack
-        self.frames = deque(maxlen=frame_stack)
 
-    def preprocess(self, obs):
-        if len(obs.shape) == 3 and obs.shape[2] == 3:
-            gray = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = obs
-        resized = cv2.resize(gray, (84, 84), interpolation=cv2.INTER_AREA)
-        return resized
 
-    def reset(self, obs):
-        frame = self.preprocess(obs)
-        self.frames = deque([frame for _ in range(self.frame_stack)], maxlen=self.frame_stack)
-        return np.stack(self.frames, axis=0)
-
-    def step(self, obs):
-        frame = self.preprocess(obs)
-        self.frames.append(frame.copy())
-        stacked = np.stack(self.frames, axis=0)
-        return stacked
-        
 def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -100,6 +77,7 @@ def evaluate(args):
             for f in frames:
                 video.append_data(f)
         print(f"Saved episode {ep} with total reward {total_reward} → {out_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -1,25 +1,35 @@
+import argparse
+import os
+import random
+
+import ale_py
+import gymnasium as gym
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
-import random
-import gymnasium as gym
-import cv2
-import ale_py
-import os
-from collections import deque
 import wandb
-import argparse
-import time
+
+from src.preprocessor import AtariPreprocessor
+from src.replay import ReplayBuffer
+
+CARTPOLE_BEST_REWARD = 0
 
 gym.register_envs(ale_py)
 
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed)
 
 def init_weights(m):
     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
         nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
+
 
 class DQN(nn.Module):
     """
@@ -28,93 +38,35 @@ class DQN(nn.Module):
         - Feel free to change the architecture (e.g. number of hidden layers and the width of each hidden layer) as you like
         - Feel free to add any member variables/functions whenever needed
     """
-    def __init__(self, num_actions):
-        super(DQN, self).__init__()
-        # An example: 
-        #self.network = nn.Sequential(
-        #    nn.Linear(input_dim, 64),
-        #    nn.ReLU(),
-        #    nn.Linear(64, 64),
-        #    nn.ReLU(),
-        #    nn.Linear(64, num_actions)
-        #)       
-        ########## YOUR CODE HERE (5~10 lines) ##########
 
-        
-        ########## END OF YOUR CODE ##########
+    def __init__(self, input_dim, num_actions):
+        super(DQN, self).__init__()
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_actions)
+        )
 
     def forward(self, x):
         return self.network(x)
 
 
-class AtariPreprocessor:
-    """
-        Preprocesing the state input of DQN for Atari
-    """    
-    def __init__(self, frame_stack=4):
-        self.frame_stack = frame_stack
-        self.frames = deque(maxlen=frame_stack)
-
-    def preprocess(self, obs):
-        gray = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
-        resized = cv2.resize(gray, (84, 84), interpolation=cv2.INTER_AREA)
-        return resized
-
-    def reset(self, obs):
-        frame = self.preprocess(obs)
-        self.frames = deque([frame for _ in range(self.frame_stack)], maxlen=self.frame_stack)
-        return np.stack(self.frames, axis=0)
-
-    def step(self, obs):
-        frame = self.preprocess(obs)
-        self.frames.append(frame)
-        return np.stack(self.frames, axis=0)
-
-
-class PrioritizedReplayBuffer:
-    """
-        Prioritizing the samples in the replay memory by the Bellman error
-        See the paper (Schaul et al., 2016) at https://arxiv.org/abs/1511.05952
-    """ 
-    def __init__(self, capacity, alpha=0.6, beta=0.4):
-        self.capacity = capacity
-        self.alpha = alpha
-        self.beta = beta
-        self.buffer = []
-        self.priorities = np.zeros((capacity,), dtype=np.float32)
-        self.pos = 0
-
-    def add(self, transition, error):
-        ########## YOUR CODE HERE (for Task 3) ########## 
-                    
-        ########## END OF YOUR CODE (for Task 3) ########## 
-        return 
-    def sample(self, batch_size):
-        ########## YOUR CODE HERE (for Task 3) ########## 
-                    
-        ########## END OF YOUR CODE (for Task 3) ########## 
-        return
-    def update_priorities(self, indices, errors):
-        ########## YOUR CODE HERE (for Task 3) ########## 
-                    
-        ########## END OF YOUR CODE (for Task 3) ########## 
-        return
-        
-
 class DQNAgent:
     def __init__(self, env_name="CartPole-v1", args=None):
         self.env = gym.make(env_name, render_mode="rgb_array")
         self.test_env = gym.make(env_name, render_mode="rgb_array")
+        self.input_dim = self.env.observation_space.shape[0]
         self.num_actions = self.env.action_space.n
-        self.preprocessor = AtariPreprocessor()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
-
-        self.q_net = DQN(self.num_actions).to(self.device)
+        self.memory = ReplayBuffer(args.memory_size)
+        self.q_net = DQN(self.input_dim, self.num_actions).to(self.device)
         self.q_net.apply(init_weights)
-        self.target_net = DQN(self.num_actions).to(self.device)
+        self.target_net = DQN(self.input_dim, self.num_actions).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
 
@@ -126,7 +78,7 @@ class DQNAgent:
 
         self.env_count = 0
         self.train_count = 0
-        self.best_reward = 0  # Initilized to 0 for CartPole and to -21 for Pong
+        self.best_reward = CARTPOLE_BEST_REWARD
         self.max_episode_steps = args.max_episode_steps
         self.replay_start_size = args.replay_start_size
         self.target_update_frequency = args.target_update_frequency
@@ -144,19 +96,18 @@ class DQNAgent:
 
     def run(self, episodes=1000):
         for ep in range(episodes):
-            obs, _ = self.env.reset()
+            state, _ = self.env.reset()
 
-            state = self.preprocessor.reset(obs)
             done = False
             total_reward = 0
             step_count = 0
 
             while not done and step_count < self.max_episode_steps:
                 action = self.select_action(state)
-                next_obs, reward, terminated, truncated, _ = self.env.step(action)
+                next_state, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
-                
-                next_state = self.preprocessor.step(next_obs)
+
+                next_state = next_state
                 self.memory.append((state, action, reward, next_state, done))
 
                 for _ in range(self.train_per_step):
@@ -167,8 +118,9 @@ class DQNAgent:
                 self.env_count += 1
                 step_count += 1
 
-                if self.env_count % 1000 == 0:                 
-                    print(f"[Collect] Ep: {ep} Step: {step_count} SC: {self.env_count} UC: {self.train_count} Eps: {self.epsilon:.4f}")
+                if self.env_count % 1000 == 0:
+                    print(
+                        f"[Collect] Ep: {ep} Step: {step_count} SC: {self.env_count} UC: {self.train_count} Eps: {self.epsilon:.4f}")
                     wandb.log({
                         "Episode": ep,
                         "Step Count": step_count,
@@ -176,11 +128,8 @@ class DQNAgent:
                         "Update Count": self.train_count,
                         "Epsilon": self.epsilon
                     })
-                    ########## YOUR CODE HERE  ##########
-                    # Add additional wandb logs for debugging if needed 
-                    
-                    ########## END OF YOUR CODE ##########   
-            print(f"[Eval] Ep: {ep} Total Reward: {total_reward} SC: {self.env_count} UC: {self.train_count} Eps: {self.epsilon:.4f}")
+            print(
+                f"[Eval] Ep: {ep} Total Reward: {total_reward} SC: {self.env_count} UC: {self.train_count} Eps: {self.epsilon:.4f}")
             wandb.log({
                 "Episode": ep,
                 "Total Reward": total_reward,
@@ -188,10 +137,6 @@ class DQNAgent:
                 "Update Count": self.train_count,
                 "Epsilon": self.epsilon
             })
-            ########## YOUR CODE HERE  ##########
-            # Add additional wandb logs for debugging if needed 
-            
-            ########## END OF YOUR CODE ##########  
             if ep % 100 == 0:
                 model_path = os.path.join(self.save_dir, f"model_ep{ep}.pt")
                 torch.save(self.q_net.state_dict(), model_path)
@@ -212,8 +157,8 @@ class DQNAgent:
                 })
 
     def evaluate(self):
-        obs, _ = self.test_env.reset()
-        state = self.preprocessor.reset(obs)
+        state, _ = self.test_env.reset()
+
         done = False
         total_reward = 0
 
@@ -221,52 +166,47 @@ class DQNAgent:
             state_tensor = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(self.device)
             with torch.no_grad():
                 action = self.q_net(state_tensor).argmax().item()
-            next_obs, reward, terminated, truncated, _ = self.test_env.step(action)
+            next_state, reward, terminated, truncated, _ = self.test_env.step(action)
             done = terminated or truncated
             total_reward += reward
-            state = self.preprocessor.step(next_obs)
+            state = next_state
 
         return total_reward
-
 
     def train(self):
 
         if len(self.memory) < self.replay_start_size:
-            return 
-        
-        # Decay function for epsilin-greedy exploration
+            return
+
+            # Decay function for epsilin-greedy exploration
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
-       
+
         ########## YOUR CODE HERE (<5 lines) ##########
         # Sample a mini-batch of (s,a,r,s',done) from the replay buffer
 
-      
-            
         ########## END OF YOUR CODE ##########
 
         # Convert the states, actions, rewards, next_states, and dones into torch tensors
         # NOTE: Enable this part after you finish the mini-batch sampling
-        #states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
-        #next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
-        #actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
-        #rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        #dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
-        #q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-        
+        # states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
+        # next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
+        # actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
+        # rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+        # dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
+        # q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+
         ########## YOUR CODE HERE (~10 lines) ##########
-        # Implement the loss function of DQN and the gradient updates 
-      
-        
-      
-        ########## END OF YOUR CODE ##########  
+        # Implement the loss function of DQN and the gradient updates
+
+        ########## END OF YOUR CODE ##########
 
         if self.train_count % self.target_update_frequency == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
 
         # NOTE: Enable this part if "loss" is defined
-        #if self.train_count % 1000 == 0:
+        # if self.train_count % 1000 == 0:
         #    print(f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
 
 
