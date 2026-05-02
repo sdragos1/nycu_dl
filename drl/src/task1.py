@@ -12,8 +12,6 @@ import torch.optim as optim
 import wandb
 from torch.nn import MSELoss
 
-from src.replay import ReplayBuffer
-
 CARTPOLE_BEST_REWARD = 0
 
 gym.register_envs(ale_py)
@@ -25,6 +23,23 @@ torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(seed)
 
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+
+    def append(self, transition):
+        if len(self.buffer) >= self.capacity:
+            self.buffer.pop(0)
+        self.buffer.append(transition)
+
+    def sample(self, batch_size):
+        experiences = random.sample(self.buffer, k=batch_size)
+        states, actions, rewards, next_states, dones = zip(*experiences)
+        return states, actions, rewards, next_states, dones
+
+    def __len__(self):
+        return len(self.buffer)
 
 def init_weights(m):
     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
@@ -87,6 +102,7 @@ class DQNAgent:
         self.best_reward = CARTPOLE_BEST_REWARD
         self.max_episode_steps = args.max_episode_steps
         self.replay_start_size = args.replay_start_size
+        self.min_buffer_to_train = max(self.replay_start_size, self.batch_size)
         self.target_update_frequency = args.target_update_frequency
         self.train_per_step = args.train_per_step
         self.save_dir = args.save_dir
@@ -179,7 +195,7 @@ class DQNAgent:
         return total_reward
 
     def train(self):
-        if len(self.memory) < self.replay_start_size:
+        if len(self.memory) < self.min_buffer_to_train:
             return
 
         if self.epsilon > self.epsilon_min:
@@ -194,7 +210,8 @@ class DQNAgent:
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
         q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-        target_values = self.target_net(next_states).max(1)[0]
+        with torch.no_grad():
+            target_values = self.target_net(next_states).max(1)[0]
 
         y = rewards + self.gamma * target_values * (1 - dones)
         loss = self.criterion(q_values, y)
