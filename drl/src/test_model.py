@@ -7,7 +7,8 @@ import imageio
 import numpy as np
 import torch
 import torch.nn as nn
-from preprocessor import AtariPreprocessor
+
+from src.task2 import AtariPreprocessor
 
 
 class DQN(nn.Module):
