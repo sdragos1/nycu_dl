@@ -185,6 +185,7 @@ class DQNAgent:
         self.epsilon_decay = args.epsilon_decay
         self.epsilon_min = args.epsilon_min
         self.reward_step_count = args.reward_step_count
+        self.episodes = args.episodes
 
         self.env_count = 0
         self.train_count = 0
@@ -205,8 +206,8 @@ class DQNAgent:
             q_values = self.q_net(state_tensor)
         return q_values.argmax().item()
 
-    def run(self, episodes=1000):
-        for ep in range(episodes):
+    def run(self):
+        for ep in range(self.episodes):
             obs, _ = self.env.reset(seed=seed + ep)
 
             state = self.preprocessor.reset(obs)
@@ -299,6 +300,7 @@ class DQNAgent:
 
         (states, actions, rewards, next_states, dones) = self.memory.sample(self.batch_size)
 
+
         states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
         next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
         actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
@@ -335,20 +337,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-dir", type=str, default="./results/vanilla-pong")
     parser.add_argument("--wandb-run-name", type=str, default="vanilla-pong-run")
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--memory-size", type=int, default=50000)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--memory-size", type=int, default=100_000)
+    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
-    parser.add_argument("--epsilon-decay", type=float, default=0.9997)
-    parser.add_argument("--epsilon-min", type=float, default=0.01)
-    parser.add_argument("--target-update-frequency", type=int, default=500)
-    parser.add_argument("--replay-start-size", type=int, default=1000)
-    parser.add_argument("--max-episode-steps", type=int, default=500)
+    parser.add_argument("--epsilon-decay", type=float, default=0.999995)
+    parser.add_argument("--epsilon-min", type=float, default=0.05)
+    parser.add_argument("--target-update-frequency", type=int, default=1000)
+    parser.add_argument("--replay-start-size", type=int, default=10_000)
+    parser.add_argument("--max-episode-steps", type=int, default=27_000)
     parser.add_argument("--train-per-step", type=int, default=1)
     parser.add_argument("--reward-step-count", type=int, default=3)
+    parser.add_argument("--episodes", type=int, default=1500)
     args = parser.parse_args()
 
-    wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
+    wandb.init(project="DLP-Lab5-DQN-Pong", name=args.wandb_run_name, save_code=True)
     agent = DQNAgent(args=args)
     agent.run()
