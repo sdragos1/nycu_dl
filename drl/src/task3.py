@@ -25,6 +25,52 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(seed)
 
 
+def make_transition(state, action, reward, next_state, done):
+    return {
+        "state": state,
+        "action": action,
+        "reward": reward,
+        "next_state": next_state,
+        "done": done,
+    }
+
+
+class MultiStepHandler:
+    def __init__(self, step_cnt, gamma):
+        self._step_cnt = step_cnt
+        self._gamma = gamma
+        self.window: deque[dict] = deque(maxlen=step_cnt)
+
+    def append(self, transition: dict) -> list[dict] | None:
+        self.window.append(transition)
+        if transition["done"]:
+            return self._flush()
+        if len(self.window) >= self._step_cnt:
+            return [self._transform_first_transition()]
+        return None
+
+    def _flush(self):
+        transitions = []
+        while len(self.window) > 0:
+            transitions.append(self._transform_first_transition())
+        return transitions
+
+    def _transform_first_transition(self):
+        seq_reward = self._compute_seq_reward()
+        first_trans = self.window.popleft()
+        last_trans = self.window[-1] if self.window else first_trans
+        first_trans["reward"] = seq_reward
+        first_trans["next_state"] = last_trans["next_state"]
+        first_trans["done"] = last_trans["done"]
+        return first_trans
+
+    def _compute_seq_reward(self):
+        reward_sum = 0
+        for i, trans in enumerate(self.window):
+            reward_sum += trans["reward"] * (self._gamma ** i)
+        return reward_sum
+
+
 class AtariPreprocessor:
     def __init__(self, frame_stack=4):
         self.frame_stack = frame_stack
@@ -55,10 +101,18 @@ class ReplayBuffer:
         self.capacity = capacity
         self.buffer = []
 
-    def append(self, transition):
+    def append(self, transition: dict):
         if len(self.buffer) >= self.capacity:
             self.buffer.pop(0)
-        self.buffer.append(transition)
+        tup = (
+            transition["state"],
+            transition["action"],
+            transition["reward"],
+            transition["next_state"],
+            transition["done"],
+        )
+        self.buffer.append(tup)
+
 
     def sample(self, batch_size):
         experiences = random.sample(self.buffer, k=batch_size)
@@ -116,6 +170,7 @@ class DQNAgent:
         print("Using device:", self.device)
 
         self.preprocessor = AtariPreprocessor()
+        self.multi_step_handler = MultiStepHandler(args.reward_step_count, args.discount_factor)
         self.memory = ReplayBuffer(args.memory_size)
         self.q_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
         self.q_net.apply(init_weights)
@@ -129,6 +184,7 @@ class DQNAgent:
         self.epsilon = args.epsilon_start
         self.epsilon_decay = args.epsilon_decay
         self.epsilon_min = args.epsilon_min
+        self.reward_step_count = args.reward_step_count
 
         self.env_count = 0
         self.train_count = 0
@@ -164,7 +220,10 @@ class DQNAgent:
                 done = terminated or truncated
 
                 next_state = self.preprocessor.step(next_obs)
-                self.memory.append((state, action, reward, next_state, done))
+                transitions = self.multi_step_handler.append(make_transition(state, action, reward, next_state, done))
+                if transitions is not None:
+                    for trans in transitions:
+                        self.memory.append(trans)
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -251,7 +310,7 @@ class DQNAgent:
             next_actions_indices = self.q_net(next_states).argmax(1)
             target_values = self.target_net(next_states).gather(1, next_actions_indices.unsqueeze(1)).squeeze(1)
 
-        y = rewards + self.gamma * target_values * (1 - dones)
+        y = rewards + (self.gamma ** self.reward_step_count) * target_values * (1 - dones)
         loss = self.criterion(q_values, y)
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -287,6 +346,7 @@ if __name__ == "__main__":
     parser.add_argument("--replay-start-size", type=int, default=1000)
     parser.add_argument("--max-episode-steps", type=int, default=500)
     parser.add_argument("--train-per-step", type=int, default=1)
+    parser.add_argument("--reward-step-count", type=int, default=3)
     args = parser.parse_args()
 
     wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
