@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
-from torch.nn import MSELoss
 
 PONG_BEST_REWARD = -21
 
@@ -96,6 +95,104 @@ class AtariPreprocessor:
         return stacked
 
 
+class PrioritizedReplayBuffer:
+    def __init__(self, capacity, beta_step, alpha=0.6, beta=0.4):
+        self.capacity = capacity
+        self.alpha = alpha
+        self.beta = beta
+        self.beta_step = beta_step
+        self.buffer: list[tuple] = [tuple([]) for _ in range(capacity)]
+        self.priorities = np.zeros((2 * capacity - 1,), dtype=np.float32)
+        self.pos = 0
+        self.size = 0
+        self.leaf_offset = self.capacity - 1
+
+        self.min_priority = 1e-5
+        self.max_priority = 1.0
+
+    def add(self, transition, error):
+        tup = (
+            transition["state"],
+            transition["action"],
+            transition["reward"],
+            transition["next_state"],
+            transition["done"],
+        )
+        self.buffer[self.pos] = tup
+        idx = self.pos + self.leaf_offset
+        self.update_priorities([idx], [error])
+        self.pos = (self.pos + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size):
+        segment_size = self.total_priority() / batch_size
+        transitions = []
+        priorities = []
+        samples_idx = []
+
+        for i in range(batch_size):
+            segment_start = segment_size * i
+            segment_end = segment_size * (i + 1)
+            priority = random.uniform(segment_start, segment_end)
+            tree_index = 0
+            priority_idx = 0
+            while True:
+                left_child = self._left_child_idx(tree_index)
+                right_child = self._right_child_idx(tree_index)
+                if left_child >= len(self.priorities):
+                    priority_idx = tree_index
+                    break
+                else:
+                    if priority <= self.priorities[left_child]:
+                        tree_index = left_child
+                    else:
+                        priority -= self.priorities[left_child]
+                        tree_index = right_child
+            transition_idx = priority_idx - self.capacity + 1
+            samples_idx.append(priority_idx)
+            transitions.append(self.buffer[transition_idx])
+            priorities.append(self.priorities[priority_idx])
+
+        probabilities = np.array(priorities) / self.total_priority()
+        weights = (self.size * probabilities) ** (-self.beta)
+        weights /= weights.max()
+        states, actions, rewards, next_states, dones = zip(*transitions)
+
+        self.beta = min(1.0, self.beta + self.beta_step)
+
+        return states, actions, rewards, next_states, dones, weights, samples_idx
+
+    def update_priorities(self, indices, errors):
+        for i in range(len(indices)):
+            tree_idx = indices[i]
+            priority = (abs(errors[i]) + self.min_priority) ** self.alpha
+            if priority > self.max_priority:
+                self.max_priority = priority
+            change = priority - self.priorities[tree_idx]
+            self.priorities[tree_idx] = priority
+            while tree_idx != 0:
+                tree_idx = self._parent(tree_idx)
+                self.priorities[tree_idx] += change
+
+    @staticmethod
+    def _parent(idx) -> int:
+        return (idx - 1) // 2
+
+    @staticmethod
+    def _left_child_idx(idx) -> int:
+        return (idx * 2) + 1
+
+    @staticmethod
+    def _right_child_idx(idx) -> int:
+        return (idx * 2) + 2
+
+    def total_priority(self) -> float:
+        return self.priorities[0]
+
+    def __len__(self):
+        return self.size
+
+
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -112,7 +209,6 @@ class ReplayBuffer:
             transition["done"],
         )
         self.buffer.append(tup)
-
 
     def sample(self, batch_size):
         experiences = random.sample(self.buffer, k=batch_size)
@@ -141,6 +237,7 @@ class DQN(nn.Module):
     def __init__(self, input_channels, num_actions):
         super(DQN, self).__init__()
         self.network = nn.Sequential(
+            nn.BatchNorm2d(input_channels),
             nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
@@ -169,16 +266,6 @@ class DQNAgent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
-        self.preprocessor = AtariPreprocessor()
-        self.multi_step_handler = MultiStepHandler(args.reward_step_count, args.discount_factor)
-        self.memory = ReplayBuffer(args.memory_size)
-        self.q_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
-        self.q_net.apply(init_weights)
-        self.target_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
-        self.target_net.load_state_dict(self.q_net.state_dict())
-        self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
-        self.criterion = MSELoss()
-
         self.batch_size = args.batch_size
         self.gamma = args.discount_factor
         self.epsilon = args.epsilon_start
@@ -186,11 +273,24 @@ class DQNAgent:
         self.epsilon_min = args.epsilon_min
         self.reward_step_count = args.reward_step_count
         self.episodes = args.episodes
+        self.max_episode_steps = args.max_episode_steps
+        self.total_expected_steps = self.episodes * self.max_episode_steps
+
+        self.preprocessor = AtariPreprocessor()
+        self.multi_step_handler = MultiStepHandler(args.reward_step_count, args.discount_factor)
+
+        beta_step = (1.0 - args.bias_annealing_factor) / self.total_expected_steps
+        self.memory = PrioritizedReplayBuffer(args.memory_size, beta_step, args.priority_importance_factor,
+                                              args.bias_annealing_factor)
+        self.q_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
+        self.q_net.apply(init_weights)
+        self.target_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
+        self.target_net.load_state_dict(self.q_net.state_dict())
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
 
         self.env_count = 0
         self.train_count = 0
         self.best_reward = PONG_BEST_REWARD
-        self.max_episode_steps = args.max_episode_steps
         self.replay_start_size = args.replay_start_size
         self.min_buffer_to_train = max(self.replay_start_size, self.batch_size)
         self.target_update_frequency = args.target_update_frequency
@@ -224,7 +324,7 @@ class DQNAgent:
                 transitions = self.multi_step_handler.append(make_transition(state, action, reward, next_state, done))
                 if transitions is not None:
                     for trans in transitions:
-                        self.memory.append(trans)
+                        self.memory.add(trans, self.memory.max_priority)
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -298,11 +398,11 @@ class DQNAgent:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
 
-        (states, actions, rewards, next_states, dones) = self.memory.sample(self.batch_size)
+        (states, actions, rewards, next_states, dones, weights, samples_idx) = self.memory.sample(self.batch_size)
 
-
-        states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device)
-        next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device)
+        weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+        states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device) / 255
+        next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device) / 255
         actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
@@ -313,10 +413,18 @@ class DQNAgent:
             target_values = self.target_net(next_states).gather(1, next_actions_indices.unsqueeze(1)).squeeze(1)
 
         y = rewards + (self.gamma ** self.reward_step_count) * target_values * (1 - dones)
-        loss = self.criterion(q_values, y)
+        td_errors = q_values - y
+        loss = (td_errors ** 2) * weights
+        loss = torch.mean(loss)
+
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), args.clip)
         self.optimizer.step()
+
+        with torch.no_grad():
+            new_errors = td_errors.abs().detach().cpu().numpy()
+        self.memory.update_priorities(samples_idx, new_errors)
 
         if self.train_count % self.target_update_frequency == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
@@ -349,6 +457,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-episode-steps", type=int, default=27_000)
     parser.add_argument("--train-per-step", type=int, default=1)
     parser.add_argument("--reward-step-count", type=int, default=3)
+    parser.add_argument("--bias-annealing-factor", type=float, default=0.4)
+    parser.add_argument("--priority-importance-factor", type=float, default=0.6)
+
     parser.add_argument("--episodes", type=int, default=1500)
     args = parser.parse_args()
 
