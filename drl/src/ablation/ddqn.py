@@ -35,42 +35,6 @@ def make_transition(state, action, reward, next_state, done):
     }
 
 
-class MultiStepHandler:
-    def __init__(self, step_cnt, gamma):
-        self._step_cnt = step_cnt
-        self._gamma = gamma
-        self._gamma_powers = np.array([gamma ** i for i in range(step_cnt)], dtype=np.float64)
-        self.window: deque[dict] = deque(maxlen=step_cnt)
-
-    def append(self, transition: dict) -> list[dict] | None:
-        self.window.append(transition)
-        if transition["done"]:
-            return self._flush()
-        if len(self.window) >= self._step_cnt:
-            return [self._transform_first_transition()]
-        return None
-
-    def _flush(self):
-        transitions = []
-        while len(self.window) > 0:
-            transitions.append(self._transform_first_transition())
-        return transitions
-
-    def _transform_first_transition(self):
-        seq_reward = self._compute_seq_reward()
-        first_trans = self.window.popleft()
-        last_trans = self.window[-1] if self.window else first_trans
-        first_trans["reward"] = seq_reward
-        first_trans["next_state"] = last_trans["next_state"]
-        first_trans["done"] = last_trans["done"]
-        return first_trans
-
-    def _compute_seq_reward(self):
-        n = len(self.window)
-        rewards = np.array([t["reward"] for t in self.window], dtype=np.float64)
-        return float(np.dot(rewards, self._gamma_powers[:n]))
-
-
 class AtariPreprocessor:
     def __init__(self, frame_stack=4):
         self.frame_stack = frame_stack
@@ -95,145 +59,23 @@ class AtariPreprocessor:
         stacked = np.stack(self.frames, axis=0)
         return stacked
 
-
-class SumTree:
-    """SumTree with pre-allocated numpy arrays for structured data storage.
-
-    Instead of storing Python objects, data is stored in contiguous numpy
-    arrays. This makes batch indexing O(1) via fancy indexing instead of
-    O(batch_size) Python-level list comprehensions + np.array stacking.
-    """
-
-    def __init__(self, capacity: int):
+class ReplayBuffer:
+    def __init__(self, capacity):
         self.capacity = capacity
-        self.tree = np.zeros(2 * capacity)
-        self.states = np.zeros((capacity, *STATE_SHAPE), dtype=np.uint8)
-        self.next_states = np.zeros((capacity, *STATE_SHAPE), dtype=np.uint8)
-        self.actions = np.zeros(capacity, dtype=np.int64)
-        self.rewards = np.zeros(capacity, dtype=np.float32)
-        self.dones = np.zeros(capacity, dtype=np.float32)
-        self.write_ptr = 0
-        self.size = 0
+        self.buffer = []
 
-    def _propagate(self, idx: int, delta: float):
-        parent = idx // 2
-        while parent >= 1:
-            self.tree[parent] += delta
-            parent //= 2
+    def append(self, transition):
+        if len(self.buffer) >= self.capacity:
+            self.buffer.pop(0)
+        self.buffer.append(transition)
 
-    def _leaf_index(self, data_idx: int) -> int:
-        return data_idx + self.capacity
-
-    @property
-    def total(self) -> float:
-        return self.tree[1]
-
-    def add(self, priority: float, state, action, reward, next_state, done):
-        leaf_idx = self._leaf_index(self.write_ptr)
-        delta = priority - self.tree[leaf_idx]
-
-        self.tree[leaf_idx] = priority
-        self._propagate(leaf_idx, delta)
-
-        self.states[self.write_ptr] = state
-        self.actions[self.write_ptr] = action
-        self.rewards[self.write_ptr] = reward
-        self.next_states[self.write_ptr] = next_state
-        self.dones[self.write_ptr] = float(done)
-        self.write_ptr = (self.write_ptr + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
-
-    def update(self, data_idx: int, priority: float):
-        leaf_idx = self._leaf_index(data_idx)
-        delta = priority - self.tree[leaf_idx]
-        self.tree[leaf_idx] = priority
-        self._propagate(leaf_idx, delta)
-
-    def batch_get(self, values: np.ndarray):
-        batch_size = len(values)
-        data_indices = np.empty(batch_size, dtype=np.int64)
-        priorities = np.empty(batch_size, dtype=np.float64)
-
-        for i in range(batch_size):
-            s = values[i]
-            idx = 1
-            while idx < self.capacity:
-                left = 2 * idx
-                if s <= self.tree[left]:
-                    idx = left
-                else:
-                    s -= self.tree[left]
-                    idx = left + 1
-            data_indices[i] = idx - self.capacity
-            priorities[i] = self.tree[idx]
-
-        return data_indices, priorities
-
-
-class PrioritizedReplayBuffer:
-    def __init__(
-            self,
-            capacity: int,
-            alpha: float = 0.6,
-            beta: float = 0.4,
-            beta_increment: float = 1e-4,
-            epsilon: float = 1e-5,
-    ):
-        assert capacity & (capacity - 1) == 0, "capacity must be a power of 2"
-
-        self.tree = SumTree(capacity)
-        self.capacity = capacity
-        self.alpha = alpha
-        self.beta = beta
-        self.beta_increment = beta_increment
-        self.epsilon = epsilon
-        self.max_priority = 1.0
-
-    def _priority(self, td_error: float) -> float:
-        return (abs(td_error) + self.epsilon) ** self.alpha
-
-    def add(self, transition, td_error: float = None):
-        priority = self.max_priority if td_error is None else self._priority(td_error)
-        self.tree.add(
-            priority,
-            transition["state"],
-            transition["action"],
-            transition["reward"],
-            transition["next_state"],
-            transition["done"],
-        )
-
-    def sample(self, batch_size: int):
-        self.beta = min(1.0, self.beta + self.beta_increment)
-
-        segment = self.tree.total / batch_size
-        lows = np.arange(batch_size, dtype=np.float64) * segment
-        values = np.random.uniform(lows, lows + segment)
-
-        indices, priorities = self.tree.batch_get(values)
-
-        n = self.tree.size
-        probs = priorities / self.tree.total
-        weights = (n * probs) ** (-self.beta)
-        weights /= weights.max()
-
-        states = self.tree.states[indices]
-        next_states = self.tree.next_states[indices]
-        actions = self.tree.actions[indices]
-        rewards = self.tree.rewards[indices]
-        dones = self.tree.dones[indices]
-
-        return states, actions, rewards, next_states, dones, weights.astype(np.float32), indices
-
-    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray):
-        for idx, err in zip(indices, td_errors):
-            p = self._priority(float(err))
-            self.tree.update(int(idx), p)
-            self.max_priority = max(self.max_priority, p)
+    def sample(self, batch_size):
+        experiences = random.sample(self.buffer, k=batch_size)
+        states, actions, rewards, next_states, dones = zip(*experiences)
+        return states, actions, rewards, next_states, dones
 
     def __len__(self):
-        return self.tree.size
-
+        return len(self.buffer)
 
 def init_weights(m):
     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
@@ -287,8 +129,6 @@ class DQNAgent:
         self.epsilon = args.epsilon_start
         self.epsilon_decay = args.epsilon_decay
         self.epsilon_min = args.epsilon_min
-        self.reward_step_count = args.reward_step_count
-        self.gamma_n = self.gamma ** self.reward_step_count
         self.episodes = args.episodes
         self.max_episode_steps = args.max_episode_steps
         self.total_expected_steps = self.episodes * self.max_episode_steps
@@ -298,9 +138,7 @@ class DQNAgent:
         beta_step = (1.0 - args.bias_annealing_factor) / total_train_steps
 
         self.preprocessor = AtariPreprocessor()
-        self.multi_step_handler = MultiStepHandler(args.reward_step_count, args.discount_factor)
-        self.memory = PrioritizedReplayBuffer(args.memory_size, beta_step, args.priority_importance_factor,
-                                              args.bias_annealing_factor)
+        self.memory = ReplayBuffer(args.memory_size)
         self.q_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
         self.q_net.apply(init_weights)
         self.target_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
@@ -351,10 +189,7 @@ class DQNAgent:
                 done = terminated or truncated
 
                 next_state = self.preprocessor.step(next_obs)
-                transitions = self.multi_step_handler.append(make_transition(state, action, reward, next_state, done))
-                if transitions is not None:
-                    for trans in transitions:
-                        self.memory.add(trans)
+                self.memory.append(make_transition(state, action, reward, next_state, done))
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -429,11 +264,11 @@ class DQNAgent:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
 
-        states, actions, rewards, next_states, dones, weights, indices = self.memory.sample(self.batch_size)
+        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
 
         states_t = torch.from_numpy(states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(1.0 / 255.0)
-        next_states_t = torch.from_numpy(next_states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(1.0 / 255.0)
-        weights_t = torch.from_numpy(weights).to(self.device, non_blocking=True)
+        next_states_t = torch.from_numpy(next_states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(
+            1.0 / 255.0)
         actions_t = torch.from_numpy(actions).to(self.device, non_blocking=True)
         rewards_t = torch.from_numpy(rewards).to(self.device, non_blocking=True)
         dones_t = torch.from_numpy(dones).to(self.device, non_blocking=True)
@@ -445,9 +280,9 @@ class DQNAgent:
                 next_actions_indices = self.q_net(next_states_t).argmax(1)
                 target_values = self.target_net(next_states_t).gather(1, next_actions_indices.unsqueeze(1)).squeeze(1)
 
-            y = rewards_t + self.gamma_n * target_values * (1 - dones_t)
+            y = rewards_t + self.gamma * target_values * (1 - dones_t)
             td_errors = q_values - y
-            loss = torch.mean((td_errors ** 2) * weights_t)
+            loss = torch.mean((td_errors ** 2))
 
         self.optimizer.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
@@ -455,10 +290,6 @@ class DQNAgent:
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), self.clip)
         self.scaler.step(self.optimizer)
         self.scaler.update()
-
-        with torch.no_grad():
-            new_errors = td_errors.abs().cpu().numpy()
-        self.memory.update_priorities(indices, new_errors)
 
         if self.train_count % self.target_update_frequency == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
@@ -480,7 +311,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-dir", type=str, default="./results/vanilla-pong")
     parser.add_argument("--wandb-run-name", type=str, default="vanilla-pong-run")
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--memory-size", type=int, default=2**17)
+    parser.add_argument("--memory-size", type=int, default=2 ** 17)
     parser.add_argument("--lr", type=float, default=6.25e-5)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
@@ -490,7 +321,6 @@ if __name__ == "__main__":
     parser.add_argument("--replay-start-size", type=int, default=20_000)
     parser.add_argument("--max-episode-steps", type=int, default=27_000)
     parser.add_argument("--train-per-step", type=int, default=1)
-    parser.add_argument("--reward-step-count", type=int, default=3)
     parser.add_argument("--bias-annealing-factor", type=float, default=0.4)
     parser.add_argument("--priority-importance-factor", type=float, default=0.6)
     parser.add_argument("--clip", default=10.0, type=float)

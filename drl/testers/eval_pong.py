@@ -1,6 +1,6 @@
 """
 Evaluation script for Task 3: Enhanced DQN on Pong-v5
-Compatible with task3.py where normalization (/255) happens OUTSIDE the model.
+Compatible with ddqn_per.py where normalization (/255) happens OUTSIDE the model.
 Usage: python src/eval_pong.py --model-path results/best_model.pt
 """
 import argparse
@@ -45,7 +45,7 @@ class AtariPreprocessor:
 
 
 class DQN(nn.Module):
-    """Mirrors task3.py architecture — normalization is done externally."""
+    """Mirrors ddqn_per.py architecture — normalization is done externally."""
 
     def __init__(self, input_channels, num_actions):
         super(DQN, self).__init__()

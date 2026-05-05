@@ -35,42 +35,6 @@ def make_transition(state, action, reward, next_state, done):
     }
 
 
-class MultiStepHandler:
-    def __init__(self, step_cnt, gamma):
-        self._step_cnt = step_cnt
-        self._gamma = gamma
-        self._gamma_powers = np.array([gamma ** i for i in range(step_cnt)], dtype=np.float64)
-        self.window: deque[dict] = deque(maxlen=step_cnt)
-
-    def append(self, transition: dict) -> list[dict] | None:
-        self.window.append(transition)
-        if transition["done"]:
-            return self._flush()
-        if len(self.window) >= self._step_cnt:
-            return [self._transform_first_transition()]
-        return None
-
-    def _flush(self):
-        transitions = []
-        while len(self.window) > 0:
-            transitions.append(self._transform_first_transition())
-        return transitions
-
-    def _transform_first_transition(self):
-        seq_reward = self._compute_seq_reward()
-        first_trans = self.window.popleft()
-        last_trans = self.window[-1] if self.window else first_trans
-        first_trans["reward"] = seq_reward
-        first_trans["next_state"] = last_trans["next_state"]
-        first_trans["done"] = last_trans["done"]
-        return first_trans
-
-    def _compute_seq_reward(self):
-        n = len(self.window)
-        rewards = np.array([t["reward"] for t in self.window], dtype=np.float64)
-        return float(np.dot(rewards, self._gamma_powers[:n]))
-
-
 class AtariPreprocessor:
     def __init__(self, frame_stack=4):
         self.frame_stack = frame_stack
@@ -287,8 +251,6 @@ class DQNAgent:
         self.epsilon = args.epsilon_start
         self.epsilon_decay = args.epsilon_decay
         self.epsilon_min = args.epsilon_min
-        self.reward_step_count = args.reward_step_count
-        self.gamma_n = self.gamma ** self.reward_step_count
         self.episodes = args.episodes
         self.max_episode_steps = args.max_episode_steps
         self.total_expected_steps = self.episodes * self.max_episode_steps
@@ -298,7 +260,6 @@ class DQNAgent:
         beta_step = (1.0 - args.bias_annealing_factor) / total_train_steps
 
         self.preprocessor = AtariPreprocessor()
-        self.multi_step_handler = MultiStepHandler(args.reward_step_count, args.discount_factor)
         self.memory = PrioritizedReplayBuffer(args.memory_size, beta_step, args.priority_importance_factor,
                                               args.bias_annealing_factor)
         self.q_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
@@ -351,10 +312,7 @@ class DQNAgent:
                 done = terminated or truncated
 
                 next_state = self.preprocessor.step(next_obs)
-                transitions = self.multi_step_handler.append(make_transition(state, action, reward, next_state, done))
-                if transitions is not None:
-                    for trans in transitions:
-                        self.memory.add(trans)
+                self.memory.add(make_transition(state, action, reward, next_state, done))
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -432,7 +390,8 @@ class DQNAgent:
         states, actions, rewards, next_states, dones, weights, indices = self.memory.sample(self.batch_size)
 
         states_t = torch.from_numpy(states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(1.0 / 255.0)
-        next_states_t = torch.from_numpy(next_states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(1.0 / 255.0)
+        next_states_t = torch.from_numpy(next_states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(
+            1.0 / 255.0)
         weights_t = torch.from_numpy(weights).to(self.device, non_blocking=True)
         actions_t = torch.from_numpy(actions).to(self.device, non_blocking=True)
         rewards_t = torch.from_numpy(rewards).to(self.device, non_blocking=True)
@@ -445,7 +404,7 @@ class DQNAgent:
                 next_actions_indices = self.q_net(next_states_t).argmax(1)
                 target_values = self.target_net(next_states_t).gather(1, next_actions_indices.unsqueeze(1)).squeeze(1)
 
-            y = rewards_t + self.gamma_n * target_values * (1 - dones_t)
+            y = rewards_t + self.gamma * target_values * (1 - dones_t)
             td_errors = q_values - y
             loss = torch.mean((td_errors ** 2) * weights_t)
 
@@ -480,7 +439,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-dir", type=str, default="./results/vanilla-pong")
     parser.add_argument("--wandb-run-name", type=str, default="vanilla-pong-run")
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--memory-size", type=int, default=2**17)
+    parser.add_argument("--memory-size", type=int, default=2 ** 17)
     parser.add_argument("--lr", type=float, default=6.25e-5)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
@@ -490,7 +449,6 @@ if __name__ == "__main__":
     parser.add_argument("--replay-start-size", type=int, default=20_000)
     parser.add_argument("--max-episode-steps", type=int, default=27_000)
     parser.add_argument("--train-per-step", type=int, default=1)
-    parser.add_argument("--reward-step-count", type=int, default=3)
     parser.add_argument("--bias-annealing-factor", type=float, default=0.4)
     parser.add_argument("--priority-importance-factor", type=float, default=0.6)
     parser.add_argument("--clip", default=10.0, type=float)
