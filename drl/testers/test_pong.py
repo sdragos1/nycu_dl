@@ -104,17 +104,17 @@ def evaluate(args):
 
     # Load model
     model = DQN(4, num_actions).to(device)
-    checkpoint = torch.load(args.model_path, map_location=device)
-
-    # Handle different checkpoint formats
-    if isinstance(checkpoint, dict):
-        if 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint)
+    checkpoint = torch.load(args.model_path, map_location=device, weights_only=True)
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    elif isinstance(checkpoint, dict):
+        state_dict = checkpoint
     else:
-        model = checkpoint
+        state_dict = checkpoint.state_dict()
 
+    # Strip `_orig_mod.` prefix added by torch.compile
+    state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+    model.load_state_dict(state_dict)
     model.eval()
 
     # Create output directories
@@ -271,11 +271,9 @@ def evaluate(args):
 
     print(f"\nResults saved to: {results_path}")
 
-    # Plot evaluation results
     plot_path = os.path.join(args.output_dir, f"task{args.task}_evaluation_plot.png")
     plot_evaluation_results(all_scores, seeds, args.task, plot_path)
 
-    # Print final statement for screenshot
     print("\n" + "=" * 60)
     print("INCLUDE THIS SCREENSHOT IN YOUR REPORT:")
     print("=" * 60)

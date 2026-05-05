@@ -13,6 +13,7 @@ import torch.optim as optim
 import wandb
 
 PONG_BEST_REWARD = -21
+STATE_SHAPE = (4, 84, 84)
 
 gym.register_envs(ale_py)
 
@@ -38,6 +39,7 @@ class MultiStepHandler:
     def __init__(self, step_cnt, gamma):
         self._step_cnt = step_cnt
         self._gamma = gamma
+        self._gamma_powers = np.array([gamma ** i for i in range(step_cnt)], dtype=np.float64)
         self.window: deque[dict] = deque(maxlen=step_cnt)
 
     def append(self, transition: dict) -> list[dict] | None:
@@ -64,10 +66,9 @@ class MultiStepHandler:
         return first_trans
 
     def _compute_seq_reward(self):
-        reward_sum = 0
-        for i, trans in enumerate(self.window):
-            reward_sum += trans["reward"] * (self._gamma ** i)
-        return reward_sum
+        n = len(self.window)
+        rewards = np.array([t["reward"] for t in self.window], dtype=np.float64)
+        return float(np.dot(rewards, self._gamma_powers[:n]))
 
 
 class AtariPreprocessor:
@@ -96,13 +97,24 @@ class AtariPreprocessor:
 
 
 class SumTree:
+    """SumTree with pre-allocated numpy arrays for structured data storage.
+
+    Instead of storing Python objects, data is stored in contiguous numpy
+    arrays. This makes batch indexing O(1) via fancy indexing instead of
+    O(batch_size) Python-level list comprehensions + np.array stacking.
+    """
+
     def __init__(self, capacity: int):
         self.capacity = capacity
         self.tree = np.zeros(2 * capacity)
-        self.data = np.empty(capacity, dtype=object)
+        # Pre-allocated contiguous arrays — eliminates np.array(list_of_arrays)
+        self.states = np.zeros((capacity, *STATE_SHAPE), dtype=np.uint8)
+        self.next_states = np.zeros((capacity, *STATE_SHAPE), dtype=np.uint8)
+        self.actions = np.zeros(capacity, dtype=np.int64)
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=np.float32)
         self.write_ptr = 0
         self.size = 0
-
 
     def _propagate(self, idx: int, delta: float):
         parent = idx // 2
@@ -117,14 +129,18 @@ class SumTree:
     def total(self) -> float:
         return self.tree[1]
 
-    def add(self, priority: float, transition):
+    def add(self, priority: float, state, action, reward, next_state, done):
         leaf_idx = self._leaf_index(self.write_ptr)
         delta = priority - self.tree[leaf_idx]
 
         self.tree[leaf_idx] = priority
         self._propagate(leaf_idx, delta)
 
-        self.data[self.write_ptr] = transition
+        self.states[self.write_ptr] = state
+        self.actions[self.write_ptr] = action
+        self.rewards[self.write_ptr] = reward
+        self.next_states[self.write_ptr] = next_state
+        self.dones[self.write_ptr] = float(done)
         self.write_ptr = (self.write_ptr + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
@@ -134,18 +150,25 @@ class SumTree:
         self.tree[leaf_idx] = priority
         self._propagate(leaf_idx, delta)
 
-    def get(self, s: float):
-        idx = 1
-        while idx < self.capacity:
-            left = 2 * idx
-            if s <= self.tree[left]:
-                idx = left
-            else:
-                s -= self.tree[left]
-                idx = left + 1
+    def batch_get(self, values: np.ndarray):
+        batch_size = len(values)
+        data_indices = np.empty(batch_size, dtype=np.int64)
+        priorities = np.empty(batch_size, dtype=np.float64)
 
-        data_idx = idx - self.capacity
-        return data_idx, self.tree[idx], self.data[data_idx]
+        for i in range(batch_size):
+            s = values[i]
+            idx = 1
+            while idx < self.capacity:
+                left = 2 * idx
+                if s <= self.tree[left]:
+                    idx = left
+                else:
+                    s -= self.tree[left]
+                    idx = left + 1
+            data_indices[i] = idx - self.capacity
+            priorities[i] = self.tree[idx]
+
+        return data_indices, priorities
 
 
 class PrioritizedReplayBuffer:
@@ -167,45 +190,46 @@ class PrioritizedReplayBuffer:
         self.epsilon = epsilon
         self.max_priority = 1.0
 
-
     def _priority(self, td_error: float) -> float:
         return (abs(td_error) + self.epsilon) ** self.alpha
 
     def add(self, transition, td_error: float = None):
-        tup = (
+        priority = self.max_priority if td_error is None else self._priority(td_error)
+        self.tree.add(
+            priority,
             transition["state"],
             transition["action"],
             transition["reward"],
             transition["next_state"],
             transition["done"],
         )
-        priority = self.max_priority if td_error is None else self._priority(td_error)
-        self.tree.add(priority, tup)
 
-    def sample(self, batch_size: int) -> tuple[list, np.ndarray, list[int]]:
+    def sample(self, batch_size: int):
         self.beta = min(1.0, self.beta + self.beta_increment)
 
         segment = self.tree.total / batch_size
-        indices, priorities, transitions = [], [], []
+        lows = np.arange(batch_size, dtype=np.float64) * segment
+        values = np.random.uniform(lows, lows + segment)
 
-        for i in range(batch_size):
-            s = np.random.uniform(segment * i, segment * (i + 1))
-            data_idx, priority, transition = self.tree.get(s)
-            indices.append(data_idx)
-            priorities.append(priority)
-            transitions.append(transition)
+        indices, priorities = self.tree.batch_get(values)
 
         n = self.tree.size
-        probs = np.array(priorities) / self.tree.total
+        probs = priorities / self.tree.total
         weights = (n * probs) ** (-self.beta)
         weights /= weights.max()
 
-        return transitions, weights, indices
+        states = self.tree.states[indices]
+        next_states = self.tree.next_states[indices]
+        actions = self.tree.actions[indices]
+        rewards = self.tree.rewards[indices]
+        dones = self.tree.dones[indices]
 
-    def update_priorities(self, indices: list[int], td_errors: np.ndarray):
+        return states, actions, rewards, next_states, dones, weights.astype(np.float32), indices
+
+    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray):
         for idx, err in zip(indices, td_errors):
             p = self._priority(float(err))
-            self.tree.update(idx, p)
+            self.tree.update(int(idx), p)
             self.max_priority = max(self.max_priority, p)
 
     def __len__(self):
@@ -256,7 +280,8 @@ class DQNAgent:
         self.env.action_space.seed(seed=seed)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print("Using device:", self.device)
+        self.use_amp = self.device.type == "cuda"
+        print("Using device:", self.device, "| AMP:", self.use_amp)
 
         self.batch_size = args.batch_size
         self.gamma = args.discount_factor
@@ -264,9 +289,11 @@ class DQNAgent:
         self.epsilon_decay = args.epsilon_decay
         self.epsilon_min = args.epsilon_min
         self.reward_step_count = args.reward_step_count
+        self.gamma_n = self.gamma ** self.reward_step_count
         self.episodes = args.episodes
         self.max_episode_steps = args.max_episode_steps
         self.total_expected_steps = self.episodes * self.max_episode_steps
+        self.clip = args.clip
 
         total_train_steps = self.total_expected_steps * args.train_per_step
         beta_step = (1.0 - args.bias_annealing_factor) / total_train_steps
@@ -279,7 +306,17 @@ class DQNAgent:
         self.q_net.apply(init_weights)
         self.target_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
+
+        if hasattr(torch, "compile"):
+            try:
+                self.q_net = torch.compile(self.q_net, mode="reduce-overhead")
+                self.target_net = torch.compile(self.target_net, mode="reduce-overhead")
+                print("torch.compile enabled (reduce-overhead mode)")
+            except Exception as e:
+                print(f"torch.compile unavailable, skipping: {e}")
+
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
+        self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
         self.env_count = 0
         self.train_count = 0
@@ -294,8 +331,9 @@ class DQNAgent:
     def select_action(self, state):
         if random.random() < self.epsilon:
             return random.randint(0, self.num_actions - 1)
-        state_tensor = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(self.device)
-        with torch.no_grad():
+        state_tensor = torch.from_numpy(state).unsqueeze(0).to(self.device, dtype=torch.float32, non_blocking=True)
+        state_tensor.mul_(1.0 / 255.0)
+        with torch.no_grad(), torch.amp.autocast(self.device.type, enabled=self.use_amp):
             q_values = self.q_net(state_tensor)
         return q_values.argmax().item()
 
@@ -346,7 +384,7 @@ class DQNAgent:
                 "Update Count": self.train_count,
                 "Epsilon": self.epsilon
             })
-            if ep % 100 == 0:
+            if ep % 50 == 0:
                 model_path = os.path.join(self.save_dir, f"model_ep{ep}.pt")
                 torch.save(self.q_net.state_dict(), model_path)
                 print(f"Saved model checkpoint to {model_path}")
@@ -373,8 +411,9 @@ class DQNAgent:
         total_reward = 0
 
         while not done:
-            state_tensor = torch.from_numpy(np.array(state)).float().unsqueeze(0).to(self.device)
-            with torch.no_grad():
+            state_tensor = torch.from_numpy(state).unsqueeze(0).to(self.device, dtype=torch.float32, non_blocking=True)
+            state_tensor.mul_(1.0 / 255.0)
+            with torch.no_grad(), torch.amp.autocast(self.device.type, enabled=self.use_amp):
                 action = self.q_net(state_tensor).argmax().item()
             next_obs, reward, terminated, truncated, _ = self.test_env.step(action)
             done = terminated or truncated
@@ -391,33 +430,35 @@ class DQNAgent:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
 
-        transitions, weights, indices = self.memory.sample(self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*transitions)
+        states, actions, rewards, next_states, dones, weights, indices = self.memory.sample(self.batch_size)
 
-        weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
-        states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device) / 255
-        next_states = torch.from_numpy(np.array(next_states).astype(np.float32)).to(self.device) / 255
-        actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
-        q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+        states_t = torch.from_numpy(states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(1.0 / 255.0)
+        next_states_t = torch.from_numpy(next_states).to(self.device, dtype=torch.float32, non_blocking=True).mul_(1.0 / 255.0)
+        weights_t = torch.from_numpy(weights).to(self.device, non_blocking=True)
+        actions_t = torch.from_numpy(actions).to(self.device, non_blocking=True)
+        rewards_t = torch.from_numpy(rewards).to(self.device, non_blocking=True)
+        dones_t = torch.from_numpy(dones).to(self.device, non_blocking=True)
 
-        with torch.no_grad():
-            next_actions_indices = self.q_net(next_states).argmax(1)
-            target_values = self.target_net(next_states).gather(1, next_actions_indices.unsqueeze(1)).squeeze(1)
+        with torch.amp.autocast(self.device.type, enabled=self.use_amp):
+            q_values = self.q_net(states_t).gather(1, actions_t.unsqueeze(1)).squeeze(1)
 
-        y = rewards + (self.gamma ** self.reward_step_count) * target_values * (1 - dones)
-        td_errors = q_values - y
-        loss = (td_errors ** 2) * weights
-        loss = torch.mean(loss)
+            with torch.no_grad():
+                next_actions_indices = self.q_net(next_states_t).argmax(1)
+                target_values = self.target_net(next_states_t).gather(1, next_actions_indices.unsqueeze(1)).squeeze(1)
+
+            y = rewards_t + self.gamma_n * target_values * (1 - dones_t)
+            td_errors = q_values - y
+            loss = torch.mean((td_errors ** 2) * weights_t)
 
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), args.clip)
-        self.optimizer.step()
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self.optimizer)
+        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), self.clip)
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
 
         with torch.no_grad():
-            new_errors = td_errors.abs().detach().cpu().numpy()
+            new_errors = td_errors.abs().cpu().numpy()
         self.memory.update_priorities(indices, new_errors)
 
         if self.train_count % self.target_update_frequency == 0:
@@ -446,10 +487,10 @@ if __name__ == "__main__":
     parser.add_argument("--epsilon-start", type=float, default=1.0)
     parser.add_argument("--epsilon-decay", type=float, default=0.999975)
     parser.add_argument("--epsilon-min", type=float, default=0.01)
-    parser.add_argument("--target-update-frequency", type=int, default=2500)
+    parser.add_argument("--target-update-frequency", type=int, default=1000)
     parser.add_argument("--replay-start-size", type=int, default=20_000)
     parser.add_argument("--max-episode-steps", type=int, default=27_000)
-    parser.add_argument("--train-per-step", type=int, default=2)
+    parser.add_argument("--train-per-step", type=int, default=1)
     parser.add_argument("--reward-step-count", type=int, default=3)
     parser.add_argument("--bias-annealing-factor", type=float, default=0.4)
     parser.add_argument("--priority-importance-factor", type=float, default=0.6)
