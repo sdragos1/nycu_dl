@@ -95,22 +95,86 @@ class AtariPreprocessor:
         return stacked
 
 
+class SumTree:
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.tree = np.zeros(2 * capacity)
+        self.data = np.empty(capacity, dtype=object)
+        self.write_ptr = 0
+        self.size = 0
+
+
+    def _propagate(self, idx: int, delta: float):
+        parent = idx // 2
+        while parent >= 1:
+            self.tree[parent] += delta
+            parent //= 2
+
+    def _leaf_index(self, data_idx: int) -> int:
+        return data_idx + self.capacity
+
+    @property
+    def total(self) -> float:
+        return self.tree[1]  # root holds the total sum
+
+    def add(self, priority: float, transition):
+        """Add a new transition with given priority."""
+        leaf_idx = self._leaf_index(self.write_ptr)
+        delta = priority - self.tree[leaf_idx]
+
+        self.tree[leaf_idx] = priority
+        self._propagate(leaf_idx, delta)
+
+        self.data[self.write_ptr] = transition
+        self.write_ptr = (self.write_ptr + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def update(self, data_idx: int, priority: float):
+        """Update the priority of an existing transition."""
+        leaf_idx = self._leaf_index(data_idx)
+        delta = priority - self.tree[leaf_idx]
+        self.tree[leaf_idx] = priority
+        self._propagate(leaf_idx, delta)
+
+    def get(self, s: float):
+        idx = 1
+        while idx < self.capacity:
+            left = 2 * idx
+            if s <= self.tree[left]:
+                idx = left
+            else:
+                s -= self.tree[left]
+                idx = left + 1
+
+        data_idx = idx - self.capacity
+        return data_idx, self.tree[idx], self.data[data_idx]
+
+
 class PrioritizedReplayBuffer:
-    def __init__(self, capacity, beta_step, alpha=0.6, beta=0.4):
+    def __init__(
+            self,
+            capacity: int,
+            alpha: float = 0.6,
+            beta: float = 0.4,
+            beta_increment: float = 1e-4,
+            epsilon: float = 1e-5,
+    ):
+        assert capacity & (capacity - 1) == 0, "capacity must be a power of 2"
+
+        self.tree = SumTree(capacity)
         self.capacity = capacity
         self.alpha = alpha
         self.beta = beta
-        self.beta_step = beta_step
-        self.buffer: list[tuple] = [tuple([]) for _ in range(capacity)]
-        self.priorities = np.zeros((2 * capacity - 1,), dtype=np.float32)
-        self.pos = 0
-        self.size = 0
-        self.leaf_offset = self.capacity - 1
-
-        self.min_priority = 1e-5
+        self.beta_increment = beta_increment
+        self.epsilon = epsilon
         self.max_priority = 1.0
 
-    def add(self, transition, error):
+
+    def _priority(self, td_error: float) -> float:
+        return (abs(td_error) + self.epsilon) ** self.alpha
+
+    def add(self, transition, td_error: float = None):
         tup = (
             transition["state"],
             transition["action"],
@@ -118,105 +182,37 @@ class PrioritizedReplayBuffer:
             transition["next_state"],
             transition["done"],
         )
-        self.buffer[self.pos] = tup
-        idx = self.pos + self.leaf_offset
-        self.update_priorities([idx], [error])
-        self.pos = (self.pos + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
+        priority = self.max_priority if td_error is None else self._priority(td_error)
+        self.tree.add(priority, tup)
 
-    def sample(self, batch_size):
-        segment_size = self.total_priority() / batch_size
-        transitions = []
-        priorities = []
-        samples_idx = []
+    def sample(self, batch_size: int) -> tuple[list, np.ndarray, list[int]]:
+        self.beta = min(1.0, self.beta + self.beta_increment)
+
+        segment = self.tree.total / batch_size
+        indices, priorities, transitions = [], [], []
 
         for i in range(batch_size):
-            segment_start = segment_size * i
-            segment_end = segment_size * (i + 1)
-            priority = random.uniform(segment_start, segment_end)
-            tree_index = 0
-            priority_idx = 0
-            while True:
-                left_child = self._left_child_idx(tree_index)
-                right_child = self._right_child_idx(tree_index)
-                if left_child >= len(self.priorities):
-                    priority_idx = tree_index
-                    break
-                else:
-                    if priority <= self.priorities[left_child]:
-                        tree_index = left_child
-                    else:
-                        priority -= self.priorities[left_child]
-                        tree_index = right_child
-            transition_idx = priority_idx - self.capacity + 1
-            samples_idx.append(priority_idx)
-            transitions.append(self.buffer[transition_idx])
-            priorities.append(self.priorities[priority_idx])
+            s = np.random.uniform(segment * i, segment * (i + 1))
+            data_idx, priority, transition = self.tree.get(s)
+            indices.append(data_idx)
+            priorities.append(priority)
+            transitions.append(transition)
 
-        probabilities = np.array(priorities) / self.total_priority()
-        weights = (self.size * probabilities) ** (-self.beta)
+        n = self.tree.size
+        probs = np.array(priorities) / self.tree.total
+        weights = (n * probs) ** (-self.beta)
         weights /= weights.max()
-        states, actions, rewards, next_states, dones = zip(*transitions)
 
-        self.beta = min(1.0, self.beta + self.beta_step)
+        return transitions, weights, indices
 
-        return states, actions, rewards, next_states, dones, weights, samples_idx
-
-    def update_priorities(self, indices, errors):
-        for i in range(len(indices)):
-            tree_idx = indices[i]
-            priority = (abs(errors[i]) + self.min_priority) ** self.alpha
-            if priority > self.max_priority:
-                self.max_priority = priority
-            change = priority - self.priorities[tree_idx]
-            self.priorities[tree_idx] = priority
-            while tree_idx != 0:
-                tree_idx = self._parent(tree_idx)
-                self.priorities[tree_idx] += change
-
-    @staticmethod
-    def _parent(idx) -> int:
-        return (idx - 1) // 2
-
-    @staticmethod
-    def _left_child_idx(idx) -> int:
-        return (idx * 2) + 1
-
-    @staticmethod
-    def _right_child_idx(idx) -> int:
-        return (idx * 2) + 2
-
-    def total_priority(self) -> float:
-        return self.priorities[0]
+    def update_priorities(self, indices: list[int], td_errors: np.ndarray):
+        for idx, err in zip(indices, td_errors):
+            p = self._priority(float(err))
+            self.tree.update(idx, p)
+            self.max_priority = max(self.max_priority, p)
 
     def __len__(self):
-        return self.size
-
-
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.buffer = []
-
-    def append(self, transition: dict):
-        if len(self.buffer) >= self.capacity:
-            self.buffer.pop(0)
-        tup = (
-            transition["state"],
-            transition["action"],
-            transition["reward"],
-            transition["next_state"],
-            transition["done"],
-        )
-        self.buffer.append(tup)
-
-    def sample(self, batch_size):
-        experiences = random.sample(self.buffer, k=batch_size)
-        states, actions, rewards, next_states, dones = zip(*experiences)
-        return states, actions, rewards, next_states, dones
-
-    def __len__(self):
-        return len(self.buffer)
+        return self.tree.size
 
 
 def init_weights(m):
@@ -237,7 +233,6 @@ class DQN(nn.Module):
     def __init__(self, input_channels, num_actions):
         super(DQN, self).__init__()
         self.network = nn.Sequential(
-            nn.BatchNorm2d(input_channels),
             nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
@@ -276,10 +271,11 @@ class DQNAgent:
         self.max_episode_steps = args.max_episode_steps
         self.total_expected_steps = self.episodes * self.max_episode_steps
 
+        total_train_steps = self.total_expected_steps * args.train_per_step
+        beta_step = (1.0 - args.bias_annealing_factor) / total_train_steps
+
         self.preprocessor = AtariPreprocessor()
         self.multi_step_handler = MultiStepHandler(args.reward_step_count, args.discount_factor)
-
-        beta_step = (1.0 - args.bias_annealing_factor) / self.total_expected_steps
         self.memory = PrioritizedReplayBuffer(args.memory_size, beta_step, args.priority_importance_factor,
                                               args.bias_annealing_factor)
         self.q_net = DQN(self.preprocessor.frame_stack, self.num_actions).to(self.device)
@@ -324,7 +320,7 @@ class DQNAgent:
                 transitions = self.multi_step_handler.append(make_transition(state, action, reward, next_state, done))
                 if transitions is not None:
                     for trans in transitions:
-                        self.memory.add(trans, self.memory.max_priority)
+                        self.memory.add(trans)
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -398,7 +394,8 @@ class DQNAgent:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
 
-        (states, actions, rewards, next_states, dones, weights, samples_idx) = self.memory.sample(self.batch_size)
+        transitions, weights, indices = self.memory.sample(self.batch_size)
+        states, actions, rewards, next_states, dones = zip(*transitions)
 
         weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
         states = torch.from_numpy(np.array(states).astype(np.float32)).to(self.device) / 255
@@ -424,7 +421,7 @@ class DQNAgent:
 
         with torch.no_grad():
             new_errors = td_errors.abs().detach().cpu().numpy()
-        self.memory.update_priorities(samples_idx, new_errors)
+        self.memory.update_priorities(indices, new_errors)
 
         if self.train_count % self.target_update_frequency == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
@@ -446,21 +443,22 @@ if __name__ == "__main__":
     parser.add_argument("--save-dir", type=str, default="./results/vanilla-pong")
     parser.add_argument("--wandb-run-name", type=str, default="vanilla-pong-run")
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--memory-size", type=int, default=100_000)
-    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--memory-size", type=int, default=2**17)
+    parser.add_argument("--lr", type=float, default=6.25e-5)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
-    parser.add_argument("--epsilon-decay", type=float, default=0.999995)
-    parser.add_argument("--epsilon-min", type=float, default=0.05)
-    parser.add_argument("--target-update-frequency", type=int, default=1000)
-    parser.add_argument("--replay-start-size", type=int, default=10_000)
+    parser.add_argument("--epsilon-decay", type=float, default=0.999975)
+    parser.add_argument("--epsilon-min", type=float, default=0.01)
+    parser.add_argument("--target-update-frequency", type=int, default=2500)
+    parser.add_argument("--replay-start-size", type=int, default=20_000)
     parser.add_argument("--max-episode-steps", type=int, default=27_000)
-    parser.add_argument("--train-per-step", type=int, default=1)
+    parser.add_argument("--train-per-step", type=int, default=2)
     parser.add_argument("--reward-step-count", type=int, default=3)
     parser.add_argument("--bias-annealing-factor", type=float, default=0.4)
     parser.add_argument("--priority-importance-factor", type=float, default=0.6)
+    parser.add_argument("--clip", default=10.0, type=float)
 
-    parser.add_argument("--episodes", type=int, default=1500)
+    parser.add_argument("--episodes", type=int, default=2000)
     args = parser.parse_args()
 
     wandb.init(project="DLP-Lab5-DQN-Pong", name=args.wandb_run_name, save_code=True)
