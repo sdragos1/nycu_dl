@@ -27,12 +27,16 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   pytest
 comm==0.2.3
     # via ipykernel
+contourpy==1.3.3
+    # via matplotlib
 cuda-bindings==13.2.0 ; sys_platform == 'linux'
     # via torch
 cuda-pathfinder==1.5.4 ; sys_platform == 'linux'
     # via cuda-bindings
 cuda-toolkit==13.0.2 ; sys_platform == 'linux'
     # via torch
+cycler==0.12.1
+    # via matplotlib
 debugpy==1.8.20
     # via ipykernel
 decorator==5.2.1
@@ -43,6 +47,8 @@ farama-notifications==0.0.6
     # via gymnasium
 filelock==3.29.0
     # via torch
+fonttools==4.62.1
+    # via matplotlib
 fsspec==2026.4.0
     # via torch
 gitdb==4.0.12
@@ -75,8 +81,12 @@ jupyter-core==5.9.1
     # via
     #   ipykernel
     #   jupyter-client
+kiwisolver==1.5.0
+    # via matplotlib
 markupsafe==3.0.3
     # via jinja2
+matplotlib==3.10.9
+    # via drl
 matplotlib-inline==0.2.1
     # via
     #   ipykernel
@@ -90,9 +100,11 @@ networkx==3.6.1
 numpy==2.4.4
     # via
     #   ale-py
+    #   contourpy
     #   drl
     #   gymnasium
     #   imageio
+    #   matplotlib
     #   opencv-python
 nvidia-cublas==13.1.0.3 ; sys_platform == 'linux'
     # via
@@ -138,6 +150,7 @@ opencv-python==4.13.0.92
 packaging==26.2
     # via
     #   ipykernel
+    #   matplotlib
     #   pytest
     #   wandb
 parso==0.8.7
@@ -145,7 +158,9 @@ parso==0.8.7
 pexpect==4.9.0 ; sys_platform != 'emscripten' and sys_platform != 'win32'
     # via ipython
 pillow==12.2.0
-    # via imageio
+    # via
+    #   imageio
+    #   matplotlib
 platformdirs==4.9.6
     # via
     #   jupyter-core
@@ -176,10 +191,14 @@ pygments==2.20.0
     #   ipython
     #   ipython-pygments-lexers
     #   pytest
+pyparsing==3.3.2
+    # via matplotlib
 pytest==9.0.3
     # via drl
 python-dateutil==2.9.0.post0
-    # via jupyter-client
+    # via
+    #   jupyter-client
+    #   matplotlib
 pyyaml==6.0.3
     # via wandb
 pyzmq==27.1.0

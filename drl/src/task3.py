@@ -96,7 +96,6 @@ class AtariPreprocessor:
 
 
 class SumTree:
-
     def __init__(self, capacity: int):
         self.capacity = capacity
         self.tree = np.zeros(2 * capacity)
@@ -116,10 +115,9 @@ class SumTree:
 
     @property
     def total(self) -> float:
-        return self.tree[1]  # root holds the total sum
+        return self.tree[1]
 
     def add(self, priority: float, transition):
-        """Add a new transition with given priority."""
         leaf_idx = self._leaf_index(self.write_ptr)
         delta = priority - self.tree[leaf_idx]
 
@@ -131,7 +129,6 @@ class SumTree:
         self.size = min(self.size + 1, self.capacity)
 
     def update(self, data_idx: int, priority: float):
-        """Update the priority of an existing transition."""
         leaf_idx = self._leaf_index(data_idx)
         delta = priority - self.tree[leaf_idx]
         self.tree[leaf_idx] = priority

@@ -1,0 +1,1 @@
+python3 src/test_cartpole.py --model_path cartpole_best.pt
