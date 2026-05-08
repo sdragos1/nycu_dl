@@ -1,0 +1,37 @@
+============================================================
+DQN Evaluation Results - Task 2
+Model: vanilla_dqn_pong.pt
+Date: Tue May  5 03:08:07 PM CEST 2026
+============================================================
+
+Number of episodes: 20
+Seeds used: 0 to 19
+
+Episode Details:
+----------------------------------------
+Episode 1: Seed=0, Score=21.0, Total Reward=21.0, Steps=1658
+Episode 2: Seed=1, Score=10.0, Total Reward=10.0, Steps=2444
+Episode 3: Seed=2, Score=18.0, Total Reward=18.0, Steps=1958
+Episode 4: Seed=3, Score=17.0, Total Reward=17.0, Steps=1967
+Episode 5: Seed=4, Score=21.0, Total Reward=21.0, Steps=1750
+Episode 6: Seed=5, Score=21.0, Total Reward=21.0, Steps=1645
+Episode 7: Seed=6, Score=20.0, Total Reward=20.0, Steps=1777
+Episode 8: Seed=7, Score=18.0, Total Reward=18.0, Steps=2098
+Episode 9: Seed=8, Score=16.0, Total Reward=16.0, Steps=1973
+Episode 10: Seed=9, Score=18.0, Total Reward=18.0, Steps=1954
+Episode 11: Seed=10, Score=18.0, Total Reward=18.0, Steps=1878
+Episode 12: Seed=11, Score=18.0, Total Reward=18.0, Steps=1931
+Episode 13: Seed=12, Score=20.0, Total Reward=20.0, Steps=1853
+Episode 14: Seed=13, Score=17.0, Total Reward=17.0, Steps=2026
+Episode 15: Seed=14, Score=18.0, Total Reward=18.0, Steps=1950
+Episode 16: Seed=15, Score=16.0, Total Reward=16.0, Steps=2258
+Episode 17: Seed=16, Score=17.0, Total Reward=17.0, Steps=1937
+Episode 18: Seed=17, Score=16.0, Total Reward=16.0, Steps=1979
+Episode 19: Seed=18, Score=15.0, Total Reward=15.0, Steps=2079
+Episode 20: Seed=19, Score=18.0, Total Reward=18.0, Steps=2230
+
+----------------------------------------
+Mean Score: 17.65 ± 2.46
+Min Score: 10.0
+Max Score: 21.0
+Episodes reaching score 19: 5/20
