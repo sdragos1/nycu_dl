@@ -218,4 +218,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-data/CLEVR_v1.0
+data/iclevr
