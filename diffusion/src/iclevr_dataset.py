@@ -76,3 +76,9 @@ class ICLEVRDataset(Dataset):
         with open(test_file, encoding='utf-8', mode="r") as f:
             test_list = json.load(f)
         return test_list
+
+
+def train_data_loader(batch_size: int = 32):
+    return torch.utils.data.DataLoader(
+        ICLEVRDataset(mode='train'), batch_size=batch_size, shuffle=True,
+    )
