@@ -13,8 +13,8 @@ For computing the classification accruacy.
 
 3. Details:
 
-The model is based on ResNet18 with only chaning the
-last linear layer. The model is trained on iclevr dataset
+The ddpm is based on ResNet18 with only chaning the
+last linear layer. The ddpm is trained on iclevr dataset
 with 1 to 5 objects and the resolution is the upsampled 
 64x64 images from 32x32 images.
 
