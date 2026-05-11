@@ -7,7 +7,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from src.evaluator import Evaluation
-from src.sample import sample
+from src.sample import sample_ddim
 from src.noise_scheduler import LinearNoiseScheduler
 
 
@@ -19,7 +19,7 @@ def evaluate(model: nn.Module, scheduler: LinearNoiseScheduler, evaluator: Evalu
     with torch.no_grad():
         for batch_idx, (images, labels_t) in enumerate(val_loader):
             labels_t = labels_t.to(device)
-            samples = sample(model, labels_t, scheduler, device, eta=0.0)
+            samples = sample_ddim(model, labels_t, scheduler, device)
             samples.clamp(min=-1, max=1)
             acc = evaluator.eval(samples, labels_t)
             accuracies.append(acc)

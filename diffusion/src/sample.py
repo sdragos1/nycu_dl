@@ -5,7 +5,6 @@ import torch
 from omegaconf import DictConfig
 from torch import nn
 from torchvision.utils import save_image
-from tqdm import tqdm
 
 from src.ddpm.unet import UNet
 from src.iclevr_dataset import ICLEVRDataset
@@ -15,9 +14,9 @@ from src.utils import get_device
 
 
 @torch.no_grad()
-def sample(model: nn.Module, labels_t: torch.Tensor,
-           noise_scheduler: LinearNoiseScheduler, device: torch.device,
-           ddim_steps: int = 50, eta: float = 0.0) -> torch.Tensor:
+def sample_ddim(model: nn.Module, labels_t: torch.Tensor,
+                noise_scheduler: LinearNoiseScheduler, device: torch.device,
+                ddim_steps: int = 50, eta: float = 0.0) -> torch.Tensor:
     x_t = torch.randn((labels_t.size(0), 3, 64, 64)).to(device)
 
     steps_t = torch.linspace(noise_scheduler.total_steps - 1, 0, ddim_steps, device=device, dtype=torch.long)
@@ -43,6 +42,29 @@ def sample(model: nn.Module, labels_t: torch.Tensor,
         x_t = sqrt_alpha_bar_next * x_0 + direction + sigma * z
 
     return x_t
+
+
+@torch.no_grad()
+def sample(model: nn.Module, labels_t: torch.Tensor,
+           noise_scheduler: LinearNoiseScheduler, device: torch.device) -> torch.Tensor:
+    x = torch.randn((labels_t.size(0), 3, 64, 64)).to(device)
+
+    for t in reversed(range(noise_scheduler.total_steps)):
+        timestamps_t = torch.full((labels_t.size(0),), t, device=device, dtype=torch.long)
+
+        pred = model(x, timestamps_t, labels_t)
+        alpha = noise_scheduler.alpha[t]
+
+        sigma = torch.sqrt(noise_scheduler.beta[t])
+        minus_sqrt_alpha_bar = noise_scheduler.minus_sqrt_alpha_bar[t]
+        mean = (1 / torch.sqrt(alpha)) * (x - ((1 - alpha) / minus_sqrt_alpha_bar) * pred)
+
+        if t > 0:
+            noise = torch.randn_like(x)
+            x = mean + sigma * noise
+        else:
+            x = mean
+    return x
 
 
 @hydra.main(config_path="../conf", config_name="sample", version_base=None)
@@ -78,8 +100,8 @@ def main(cfg: DictConfig) -> None:
 
     label_t = label_t.unsqueeze(0).to(device)
 
-    gen_img = sample(model, label_t, noise_scheduler, device,
-                     ddim_steps=cfg.ddim_steps, eta=cfg.eta)
+    gen_img = sample_ddim(model, label_t, noise_scheduler, device,
+                          ddim_steps=cfg.ddim_steps, eta=cfg.eta)
     gen_img = (gen_img + 1) / 2
 
     save_name = f"{'_'.join(cfg.labels).replace(' ', '_')}.png"
