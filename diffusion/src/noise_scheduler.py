@@ -13,8 +13,8 @@ class LinearNoiseScheduler:
         self.sqrt_alpha_bar = torch.sqrt(self.alpha_bar).to(device)
         self.minus_sqrt_alpha_bar = torch.sqrt(1 - self.alpha_bar).to(device)
 
-    def noise(self, images_t: torch.Tensor, timesteps_t: torch.Tensor) -> torch.Tensor:
+    def noise(self, images_t: torch.Tensor, timesteps_t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         eps = torch.randn_like(images_t)
         sqrt_alpha_bar = self.sqrt_alpha_bar[timesteps_t].view(-1, 1, 1, 1)
         minus_sqrt_alpha_bar = self.minus_sqrt_alpha_bar[timesteps_t].view(-1, 1, 1, 1)
-        return sqrt_alpha_bar * images_t + minus_sqrt_alpha_bar * eps
+        return sqrt_alpha_bar * images_t + minus_sqrt_alpha_bar * eps, eps

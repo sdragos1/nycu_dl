@@ -39,10 +39,14 @@ def train(batch_size: int, beta_start: float, beta_end: float, num_timesteps: in
             images_t = images_t.to(device)
             labels_t = labels_t.to(device)
             timesteps_t = sample_timesteps(batch_size, num_timesteps, device)
-            images_t = noise_scheduler.noise(images_t, timesteps_t)
-            print(images_t)
+            images_t, noises_t = noise_scheduler.noise(images_t, timesteps_t)
 
             optimizer.zero_grad()
+            pred = model(images_t, timesteps_t, labels_t)
+            loss = criterion(pred, noises_t)
+            loss.backward()
+            optimizer.step()
+            scheduler.step(loss)
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,7 +66,7 @@ if __name__ == "__main__":
     wandb.init(project="DL-DDPM", name=f"unet-{str(seed)}", save_code=True, mode=wandb_mode)
     seed_all(seed)
     train(
-        batch_size=16,
+        batch_size=8,
         beta_start=1e-4,
         beta_end=2e-2,
         num_timesteps=1000,

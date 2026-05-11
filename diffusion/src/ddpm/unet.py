@@ -6,7 +6,8 @@ from src.ddpm.layers import ConvLayer, EmbeddingFusionLayer, AttentionLayer, Con
 
 class DownBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, emb_dim: int, groups: int = 8,
-                 num_layers: int = 2, down_sample: bool = True, num_heads: int = 8):
+                 num_layers: int = 2, down_sample: bool = True, num_heads: int = 8,
+                 apply_attention: bool = True):
         super(DownBlock, self).__init__()
         self.num_layers = num_layers
         self.down_sample = down_sample
@@ -24,7 +25,7 @@ class DownBlock(nn.Module):
             for i in range(num_layers)
         ])
         self.att_layers = nn.ModuleList([
-            AttentionLayer(num_heads, out_channels, groups)
+            AttentionLayer(num_heads, out_channels, groups) if apply_attention else nn.Identity()
             for _ in range(num_layers)
         ])
         self.residual_layers = nn.ModuleList(
@@ -99,7 +100,7 @@ class MidBlock(nn.Module):
 
 class UpBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, emb_dim: int, num_layers: int = 2, groups: int = 8,
-                 up_sample: bool = True, num_heads: int = 8):
+                 up_sample: bool = True, num_heads: int = 8, apply_attention: bool = True):
         super(UpBlock, self).__init__()
         self.num_layers = num_layers
         self.up_sample = up_sample
@@ -117,7 +118,7 @@ class UpBlock(nn.Module):
             for _ in range(num_layers)
         ])
         self.att_layers = nn.ModuleList([
-            AttentionLayer(num_heads, out_channels, groups)
+            AttentionLayer(num_heads, out_channels, groups) if apply_attention else nn.Identity()
             for _ in range(num_layers)
         ])
         self.residual_layers = nn.ModuleList(
@@ -147,13 +148,12 @@ class UpBlock(nn.Module):
 class UNet(nn.Module):
     def __init__(self, num_classes: int):
         super(UNet, self).__init__()
-        self.image_channels = 1
+        self.image_channels = 3
         self.down_channels = [64, 128, 256, 512]
         self.mid_channels = [512, 512, 256]
         self.down_samples = [True, True, False]
-        self.up_samples = list(reversed(self.down_samples))
         self.emb_dim = 256
-        self.num_layers = 2
+        self.num_layers = 1
         self.num_heads = 4
         self.num_classes = num_classes
 
@@ -166,7 +166,8 @@ class UNet(nn.Module):
                       self.emb_dim,
                       down_sample=self.down_samples[i],
                       num_layers=self.num_layers,
-                      num_heads=self.num_heads)
+                      num_heads=self.num_heads,
+                      apply_attention=(i > 0))
             for i in range(len(self.down_channels) - 1)
         ])
         self.mid_blocks: nn.ModuleList = nn.ModuleList([
@@ -181,27 +182,28 @@ class UNet(nn.Module):
             UpBlock(self.down_channels[i] * 2,
                     self.down_channels[i - 1] if i != 0 else 16,
                     self.emb_dim,
-                    up_sample=self.up_samples[i],
+                    up_sample=self.down_samples[i],
                     num_layers=self.num_layers,
-                    num_heads=self.num_heads)
-            for i in range(len(self.down_channels) - 1)
+                    num_heads=self.num_heads,
+                    apply_attention=(i > 0))
+            for i in reversed(range(len(self.down_channels) - 1))
         ])
-        self.norm = nn.GroupNorm(num_groups=self.num_heads, num_channels=self.emb_dim)
+        self.norm = nn.GroupNorm(num_groups=8, num_channels=16)
         self.out_conv = nn.Conv2d(16, self.image_channels, kernel_size=3, padding=1)
 
     def forward(self, x: torch.Tensor, timesteps_t: torch.Tensor, classes_t: torch.Tensor) -> torch.Tensor:
         out = self.in_conv(x)
         emb_t = self.ctx_embedding_layer(timesteps_t, classes_t)
 
-        residuals = [out]
+        residuals = []
         for idx, down in enumerate(self.down_blocks):
-            out = down(out, emb_t)
             residuals.append(out)
+            out = down(out, emb_t)
 
         for mid in self.mid_blocks:
             out = mid(out, emb_t)
 
-        for up in self.ups:
+        for up in self.up_blocks:
             residual = residuals.pop()
             out = up(out, residual, emb_t)
         out = self.norm(out)
