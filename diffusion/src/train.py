@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from src.ddpm.unet import UNet
 from src.evaluate import evaluate
+from src.evaluator import Evaluation
 from src.iclevr_dataset import train_val_data_loaders
 from src.noise_scheduler import LinearNoiseScheduler
 from src.utils import seed_all, get_device
@@ -37,10 +38,11 @@ def train(batch_size: int, beta_start: float, beta_end: float, num_timesteps: in
     )
 
     step = 0
+    best_val_acc = 0.0
+    evaluator = Evaluation(device)
     for epoch in range(epochs):
         model.train()
         epoch_loss = 0.0
-        best_val_acc = 0.0
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}")
         for i, data in enumerate(pbar):
@@ -74,9 +76,11 @@ def train(batch_size: int, beta_start: float, beta_end: float, num_timesteps: in
         wandb.log({"train/epoch_loss": avg_epoch_loss, "epoch": epoch + 1})
         scheduler.step(avg_epoch_loss)
 
-        val_acc = evaluate(model, noise_scheduler, val_loader, device)
+        val_acc = evaluate(model, noise_scheduler, evaluator, val_loader, device)
+        print(f"Epoch {epoch + 1} Validation Accuracy: {val_acc:.4f}")
         wandb.log({"val/val_acc": val_acc, "epoch": epoch + 1, "step": step})
         if val_acc > best_val_acc:
+            print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}. Saving best model...")
             best_val_acc = val_acc
             checkpoint_path = os.path.join(save_dir, f"model_epoch_{epoch + 1}.pt")
             torch.save(model.state_dict(), checkpoint_path)
