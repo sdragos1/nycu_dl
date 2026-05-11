@@ -8,8 +8,7 @@ def seed_all(seed_val: int):
     random.seed(seed_val)
     np.random.seed(seed_val)
     torch.manual_seed(seed_val)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed_val)
+    torch.cuda.manual_seed_all(seed_val)
 
 
 def get_device() -> torch.device:

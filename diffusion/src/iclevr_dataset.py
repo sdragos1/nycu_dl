@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 from torchvision.transforms import v2 as T
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, random_split, DataLoader
 
 ROOT = Path(__file__).parent.parent / "data"
 
@@ -78,7 +78,13 @@ class ICLEVRDataset(Dataset):
         return test_list
 
 
-def train_data_loader(batch_size: int = 32):
-    return torch.utils.data.DataLoader(
-        ICLEVRDataset(mode='train'), batch_size=batch_size, shuffle=True,
-    )
+def train_val_data_loaders(batch_size: int = 32) -> tuple[DataLoader, DataLoader]:
+    full_dataset = ICLEVRDataset("train")
+    train_size = int(len(full_dataset) - batch_size)
+    val_size = batch_size
+
+    train_sub, val_sub = random_split(full_dataset, [train_size, val_size])
+
+    train_loader = torch.utils.data.DataLoader(train_sub, batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_sub, batch_size=batch_size, shuffle=False)
+    return train_loader, val_loader
