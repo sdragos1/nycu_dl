@@ -8,6 +8,7 @@ weight_decay: 1.0e-4
 lr_patience: 8
 lr_factor: 0.5
 epochs: 100
+sample_every: 5
 seed: 42
 save_dir: results/unet-42
 run_name: unet-42

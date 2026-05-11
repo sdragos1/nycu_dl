@@ -87,3 +87,12 @@ def train_val_data_loaders(batch_size: int = 32, root: Optional[Path | str] = No
     train_loader = torch.utils.data.DataLoader(train_sub, batch_size=batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(val_sub, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
+
+
+def test_data_loaders(batch_size: int = 32, root: Optional[Path | str] = None) -> tuple[DataLoader, DataLoader]:
+    test_dataset = ICLEVRDataset("test", root=root)
+    new_test_dataset = ICLEVRDataset("new_test", root=root)
+
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    new_test_loader = torch.utils.data.DataLoader(new_test_dataset, batch_size=batch_size, shuffle=False)
+    return test_loader, new_test_loader
