@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 from PIL import Image
@@ -8,14 +8,15 @@ from torchvision.transforms import v2 as T
 
 from torch.utils.data import Dataset, random_split, DataLoader
 
-ROOT = Path(__file__).parent.parent / "data"
+DEFAULT_ROOT = Path(__file__).parent.parent / "data"
 
 DatasetMode = Literal["train", "test", "new_test"]
 
 
 class ICLEVRDataset(Dataset):
-    def __init__(self, mode: DatasetMode = "train"):
+    def __init__(self, mode: DatasetMode = "train", root: Optional[Path | str] = None):
         self.mode = mode
+        self.root = Path(root) if root is not None else DEFAULT_ROOT
         self.objects = self._load_objects()
         self.num_classes = len(self.objects)
         if self.mode == "train":
@@ -34,7 +35,7 @@ class ICLEVRDataset(Dataset):
         if self.mode == "train":
             fname = self.train_keys[idx]
             labels = self.train_data[fname]
-            img_path = ROOT / 'iclevr' / fname
+            img_path = self.root / 'iclevr' / fname
             image = Image.open(img_path).convert('RGB')
             image_t = self.transform(image)
 
@@ -57,29 +58,27 @@ class ICLEVRDataset(Dataset):
         else:
             return len(self.test_data)
 
-    @staticmethod
-    def _load_objects() -> dict[str, int]:
-        label_file = ROOT / 'objects.json'
+    def _load_objects(self) -> dict[str, int]:
+        label_file = self.root / 'objects.json'
         with open(label_file, encoding='utf-8', mode="r") as f:
             labels = json.load(f)
         return labels
 
-    @staticmethod
-    def _load_train_data() -> dict[str, list[str]]:
-        train_file = ROOT / "train.json"
+    def _load_train_data(self) -> dict[str, list[str]]:
+        train_file = self.root / "train.json"
         with open(train_file, encoding='utf-8', mode="r") as f:
             train_dict = json.load(f)
         return train_dict
 
     def _load_test_data(self) -> list[list[str]]:
-        test_file = ROOT / f"{self.mode}.json"
+        test_file = self.root / f"{self.mode}.json"
         with open(test_file, encoding='utf-8', mode="r") as f:
             test_list = json.load(f)
         return test_list
 
 
-def train_val_data_loaders(batch_size: int = 32) -> tuple[DataLoader, DataLoader]:
-    full_dataset = ICLEVRDataset("train")
+def train_val_data_loaders(batch_size: int = 32, root: Optional[Path | str] = None) -> tuple[DataLoader, DataLoader]:
+    full_dataset = ICLEVRDataset("train", root=root)
     train_size = int(len(full_dataset) - batch_size)
     val_size = batch_size
 

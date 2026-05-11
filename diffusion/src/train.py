@@ -35,12 +35,13 @@ def main(cfg: DictConfig) -> None:
     wandb.init(project=t.wandb_project, name=t.run_name, save_code=True, mode=wandb_mode,
                config=OmegaConf.to_container(cfg, resolve=True))
 
-    train_loader, val_loader = train_val_data_loaders(t.batch_size)
+    train_loader, val_loader = train_val_data_loaders(t.batch_size, root=t.data_root or None)
     noise_scheduler = LinearNoiseScheduler(t.beta_start, t.beta_end, t.num_timesteps, device)
     criterion = MSELoss()
     model = UNet(m).to(device)
     optimizer = AdamW(model.parameters(), lr=t.lr, weight_decay=t.weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=t.lr_factor, patience=t.lr_patience)
+    scaler = torch.cuda.amp.GradScaler()
 
     print(f"Model parameters: {model_parameters_count(model):,}")
 
@@ -63,10 +64,12 @@ def main(cfg: DictConfig) -> None:
             images_t, noises_t = noise_scheduler.noise(images_t, timesteps_t)
 
             optimizer.zero_grad()
-            pred = model(images_t, timesteps_t, labels_t)
-            loss = criterion(pred, noises_t)
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast(str(device)):
+                pred = model(images_t, timesteps_t, labels_t)
+                loss = criterion(pred, noises_t)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             epoch_loss += loss.item()
             step += 1

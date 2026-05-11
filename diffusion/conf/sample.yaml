@@ -1,0 +1,18 @@
+defaults:
+  - model: default
+  - _self_
+
+model_path: ???
+
+save_dir: results/samples
+
+data_root: null
+
+labels: []
+
+beta_start: 1.0e-4
+beta_end: 2.0e-2
+num_timesteps: 1000
+
+ddim_steps: 50
+eta: 0.0         # 0.0 = deterministic DDIM, 1.0 = stochastic (DDPM-like)

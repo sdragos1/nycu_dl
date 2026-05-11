@@ -19,7 +19,7 @@ def evaluate(model: nn.Module, scheduler: LinearNoiseScheduler, evaluator: Evalu
     with torch.no_grad():
         for batch_idx, (images, labels_t) in enumerate(val_loader):
             labels_t = labels_t.to(device)
-            samples = sample(model, labels_t, scheduler, device)
+            samples = sample(model, labels_t, scheduler, device, eta=0.0)
             samples.clamp(min=-1, max=1)
             acc = evaluator.eval(samples, labels_t)
             accuracies.append(acc)

@@ -1,6 +1,7 @@
 beta_start: 1.0e-4
 beta_end: 2.0e-2
 num_timesteps: 1000
+data_root: null
 batch_size: 16
 lr: 2.0e-4
 weight_decay: 1.0e-4
