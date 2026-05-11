@@ -1,4 +1,5 @@
 import torch
+from omegaconf import DictConfig
 from torch import nn
 
 from src.ddpm.layers import ConvLayer, EmbeddingFusionLayer, AttentionLayer, ContextEmbeddingLayer
@@ -99,8 +100,9 @@ class MidBlock(nn.Module):
 
 
 class UpBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, emb_dim: int, num_layers: int = 2, groups: int = 8,
-                 up_sample: bool = True, num_heads: int = 8, apply_attention: bool = True):
+    def __init__(self, in_channels: int, out_channels: int, upsample_channels: int, emb_dim: int,
+                 num_layers: int = 2, groups: int = 8, up_sample: bool = True, num_heads: int = 8,
+                 apply_attention: bool = True):
         super(UpBlock, self).__init__()
         self.num_layers = num_layers
         self.up_sample = up_sample
@@ -127,7 +129,7 @@ class UpBlock(nn.Module):
                 for i in range(num_layers + 1)
             ]
         )
-        self.up_sample_conv = nn.ConvTranspose2d(in_channels // 2, in_channels // 2,
+        self.up_sample_conv = nn.ConvTranspose2d(upsample_channels, upsample_channels,
                                                  4, 2, 1) \
             if self.up_sample else nn.Identity()
 
@@ -146,57 +148,63 @@ class UpBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, num_classes: int):
+    def __init__(self, cfg: DictConfig):
         super(UNet, self).__init__()
-        self.image_channels = 3
-        self.down_channels = [64, 128, 256, 512]
-        self.mid_channels = [512, 512, 256]
-        self.down_samples = [True, True, False]
-        self.emb_dim = 256
-        self.num_layers = 1
-        self.num_heads = 4
-        self.num_classes = num_classes
+        self.cfg = cfg
 
-        self.ctx_embedding_layer = ContextEmbeddingLayer(self.emb_dim, self.num_classes)
-        self.in_conv = nn.Conv2d(self.image_channels, self.down_channels[0], kernel_size=3, padding=(1, 1))
+        self.ctx_embedding_layer = ContextEmbeddingLayer(cfg.emb_dim, cfg.num_classes)
+        self.in_conv = nn.Conv2d(cfg.image_channels, cfg.down_channels[0], kernel_size=3, padding=(1, 1))
 
         self.down_blocks: nn.ModuleList = nn.ModuleList([
-            DownBlock(self.down_channels[i],
-                      self.down_channels[i + 1],
-                      self.emb_dim,
-                      down_sample=self.down_samples[i],
-                      num_layers=self.num_layers,
-                      num_heads=self.num_heads,
+            DownBlock(cfg.down_channels[i],
+                      cfg.down_channels[i + 1],
+                      cfg.emb_dim,
+                      groups=cfg.groups,
+                      down_sample=cfg.down_samples[i],
+                      num_layers=cfg.num_layers,
+                      num_heads=cfg.num_heads,
                       apply_attention=(i > 0))
-            for i in range(len(self.down_channels) - 1)
+            for i in range(len(cfg.down_channels) - 1)
         ])
         self.mid_blocks: nn.ModuleList = nn.ModuleList([
-            MidBlock(self.mid_channels[i],
-                     self.mid_channels[i + 1],
-                     self.emb_dim,
-                     num_layers=self.num_layers,
-                     num_heads=self.num_heads)
-            for i in range(len(self.mid_channels) - 1)
+            MidBlock(cfg.mid_channels[i],
+                     cfg.mid_channels[i + 1],
+                     cfg.emb_dim,
+                     groups=cfg.groups,
+                     num_layers=cfg.num_layers,
+                     num_heads=cfg.num_heads)
+            for i in range(len(cfg.mid_channels) - 1)
         ])
-        self.up_blocks: nn.ModuleList = nn.ModuleList([
-            UpBlock(self.down_channels[i] * 2,
-                    self.down_channels[i - 1] if i != 0 else 16,
-                    self.emb_dim,
-                    up_sample=self.down_samples[i],
-                    num_layers=self.num_layers,
-                    num_heads=self.num_heads,
-                    apply_attention=(i > 0))
-            for i in reversed(range(len(self.down_channels) - 1))
-        ])
-        self.norm = nn.GroupNorm(num_groups=8, num_channels=16)
-        self.out_conv = nn.Conv2d(16, self.image_channels, kernel_size=3, padding=1)
+
+
+        up_block_list = []
+        decoder_in = list(cfg.mid_channels)[-1]
+        for i in reversed(range(len(cfg.down_channels) - 1)):
+            skip_ch = cfg.down_channels[i]
+            in_ch = decoder_in + skip_ch
+            out_ch = cfg.down_channels[i - 1] if i > 0 else cfg.out_channels
+            up_block_list.append(
+                UpBlock(in_channels=in_ch,
+                        out_channels=out_ch,
+                        upsample_channels=decoder_in,
+                        emb_dim=cfg.emb_dim,
+                        groups=cfg.groups,
+                        up_sample=cfg.down_samples[i],
+                        num_layers=cfg.num_layers,
+                        num_heads=cfg.num_heads,
+                        apply_attention=(i > 0))
+            )
+            decoder_in = out_ch
+        self.up_blocks: nn.ModuleList = nn.ModuleList(up_block_list)
+        self.norm = nn.GroupNorm(num_groups=cfg.groups, num_channels=cfg.out_channels)
+        self.out_conv = nn.Conv2d(cfg.out_channels, cfg.image_channels, kernel_size=3, padding=1)
 
     def forward(self, x: torch.Tensor, timesteps_t: torch.Tensor, classes_t: torch.Tensor) -> torch.Tensor:
         out = self.in_conv(x)
         emb_t = self.ctx_embedding_layer(timesteps_t, classes_t)
 
         residuals = []
-        for idx, down in enumerate(self.down_blocks):
+        for down in self.down_blocks:
             residuals.append(out)
             out = down(out, emb_t)
 
@@ -206,7 +214,8 @@ class UNet(nn.Module):
         for up in self.up_blocks:
             residual = residuals.pop()
             out = up(out, residual, emb_t)
+
         out = self.norm(out)
-        out = nn.SiLU()(out)
+        out = torch.nn.functional.silu(out)
         out = self.out_conv(out)
         return out

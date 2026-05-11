@@ -1,0 +1,14 @@
+beta_start: 1.0e-4
+beta_end: 2.0e-2
+num_timesteps: 1000
+batch_size: 16
+lr: 2.0e-4
+weight_decay: 1.0e-4
+lr_patience: 8
+lr_factor: 0.5
+epochs: 100
+seed: 42
+save_dir: results/unet-42
+run_name: unet-42
+wandb_project: DL-DDPM
+disable_wandb: false

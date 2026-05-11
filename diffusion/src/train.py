@@ -1,8 +1,9 @@
-import argparse
 import os
 
+import hydra
 import torch
 import wandb
+from omegaconf import DictConfig, OmegaConf
 from torch.nn import MSELoss
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -13,46 +14,52 @@ from src.evaluate import evaluate
 from src.evaluator import Evaluation
 from src.iclevr_dataset import train_val_data_loaders
 from src.noise_scheduler import LinearNoiseScheduler
-from src.utils import seed_all, get_device
+from src.utils import seed_all, get_device, model_parameters_count
 
 
 def sample_timesteps(batch_size: int, num_timesteps: int, device: torch.device) -> torch.Tensor:
     return torch.randint(low=1, high=num_timesteps, size=(batch_size,), device=device).long()
 
 
-def train(batch_size: int, beta_start: float, beta_end: float, num_timesteps: int, lr: float, weight_decay: float,
-          epochs: int, save_dir: str):
-    device = get_device()
-    os.makedirs(save_dir, exist_ok=True)
+@hydra.main(config_path="../conf", config_name="config", version_base=None)
+def main(cfg: DictConfig) -> None:
+    t = cfg.train
+    m = cfg.model
 
-    train_loader, val_loader = train_val_data_loaders(batch_size)
-    noise_scheduler = LinearNoiseScheduler(beta_start, beta_end, num_timesteps, device)
+    device = get_device()
+    os.makedirs(t.save_dir, exist_ok=True)
+
+    seed_all(t.seed)
+
+    wandb_mode = 'disabled' if t.disable_wandb else 'online'
+    wandb.init(project=t.wandb_project, name=t.run_name, save_code=True, mode=wandb_mode,
+               config=OmegaConf.to_container(cfg, resolve=True))
+
+    train_loader, val_loader = train_val_data_loaders(t.batch_size)
+    noise_scheduler = LinearNoiseScheduler(t.beta_start, t.beta_end, t.num_timesteps, device)
     criterion = MSELoss()
-    model = UNet(24).to(device)
-    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=0.1,
-        patience=5,
-    )
+    model = UNet(m).to(device)
+    optimizer = AdamW(model.parameters(), lr=t.lr, weight_decay=t.weight_decay)
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=t.lr_factor, patience=t.lr_patience)
+
+    print(f"Model parameters: {model_parameters_count(model):,}")
 
     step = 0
     best_val_acc = 0.0
     evaluator = Evaluation(device)
-    for epoch in range(epochs):
+
+    for epoch in range(t.epochs):
         model.train()
         epoch_loss = 0.0
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}")
-        for i, data in enumerate(pbar):
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{t.epochs}")
+        for data in pbar:
             images_t, labels_t = data
-
             curr_batch_size = images_t.shape[0]
 
             images_t = images_t.to(device)
             labels_t = labels_t.to(device)
-            timesteps_t = sample_timesteps(curr_batch_size, num_timesteps, device)
+            timesteps_t = sample_timesteps(curr_batch_size, t.num_timesteps, device)
             images_t, noises_t = noise_scheduler.noise(images_t, timesteps_t)
 
             optimizer.zero_grad()
@@ -71,6 +78,7 @@ def train(batch_size: int, beta_start: float, beta_end: float, num_timesteps: in
                 "epoch": epoch + 1,
                 "step": step
             })
+
         avg_epoch_loss = epoch_loss / len(train_loader)
         print(f"Epoch {epoch + 1} finished. Average Loss: {avg_epoch_loss:.4f}")
         wandb.log({"train/epoch_loss": avg_epoch_loss, "epoch": epoch + 1})
@@ -79,36 +87,12 @@ def train(batch_size: int, beta_start: float, beta_end: float, num_timesteps: in
         val_acc = evaluate(model, noise_scheduler, evaluator, val_loader, device)
         print(f"Epoch {epoch + 1} Validation Accuracy: {val_acc:.4f}")
         wandb.log({"val/val_acc": val_acc, "epoch": epoch + 1, "step": step})
+
         if val_acc > best_val_acc:
-            print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}. Saving best model...")
+            print(f"Validation improved {best_val_acc:.4f} → {val_acc:.4f}. Saving model...")
             best_val_acc = val_acc
-            checkpoint_path = os.path.join(save_dir, f"model_epoch_{epoch + 1}.pt")
-            torch.save(model.state_dict(), checkpoint_path)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Train UNet')
-    parser.add_argument("--disable-wandb", action="store_true", default=False, help="Disable wandb")
-    return parser.parse_args()
+            torch.save(model.state_dict(), os.path.join(t.save_dir, f"model_epoch_{epoch + 1}.pt"))
 
 
 if __name__ == "__main__":
-    seed = 42
-    run_name = f"unet-{str(seed)}"
-
-    args = parse_args()
-    wandb_mode = 'online'
-    if args.disable_wandb:
-        wandb_mode = 'disabled'
-    wandb.init(project="DL-DDPM", name=f"unet-{str(seed)}", save_code=True, mode=wandb_mode)
-    seed_all(seed)
-    train(
-        batch_size=16,
-        beta_start=1e-4,
-        beta_end=2e-2,
-        num_timesteps=1000,
-        lr=1e-3,
-        weight_decay=1e-5,
-        epochs=10,
-        save_dir=f'results/{run_name}',
-    )
+    main()
