@@ -2,6 +2,7 @@ import os
 
 import hydra
 import torch
+import torch.nn as nn
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.nn import MSELoss
@@ -15,7 +16,7 @@ from src.evaluate import evaluate
 from src.evaluator import Evaluation
 from src.iclevr_dataset import train_val_data_loaders
 from src.noise_scheduler import LinearNoiseScheduler
-from src.sample import sample
+from src.sample import sample_ddim
 from src.utils import seed_all, get_device, model_parameters_count
 
 
@@ -41,12 +42,18 @@ def main(cfg: DictConfig) -> None:
     noise_scheduler = LinearNoiseScheduler(t.beta_start, t.beta_end, t.num_timesteps, device)
     criterion = MSELoss()
     model = UNet(m).to(device)
+    num_gpus = torch.cuda.device_count()
+    if num_gpus > 1:
+        print(f"Using {num_gpus} GPUs with DataParallel.")
+        model = nn.DataParallel(model)
+    raw_model = model.module if isinstance(model, nn.DataParallel) else model
+
     optimizer = AdamW(model.parameters(), lr=t.lr, weight_decay=t.weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=t.lr_factor, patience=t.lr_patience)
     scaler = torch.amp.GradScaler(device=str(device))
 
-    print(f"Model parameters: {model_parameters_count(model):,}")
-    wandb.watch(model, log_freq=100, log='all')
+    print(f"Model parameters: {model_parameters_count(raw_model):,}")
+    wandb.watch(raw_model, log_freq=100, log='all')
 
     step = 0
     best_val_acc = 0.0
@@ -124,14 +131,14 @@ def main(cfg: DictConfig) -> None:
         if val_acc > best_val_acc:
             print(f"Validation improved {best_val_acc:.4f} → {val_acc:.4f}. Saving model...")
             best_val_acc = val_acc
-            torch.save(model.state_dict(), os.path.join(t.save_dir, f"model_epoch_{epoch + 1}.pt"))
+            torch.save(raw_model.state_dict(), os.path.join(t.save_dir, f"model_epoch_{epoch + 1}.pt"))
 
         if (epoch + 1) % t.sample_every == 0:
             model.eval()
             _, sample_labels = next(iter(val_loader))
             sample_labels = sample_labels[:8].to(device)
-            gen = sample(model, sample_labels, noise_scheduler, device,
-                         ddim_steps=50, eta=0.0)
+            gen = sample_ddim(raw_model, sample_labels, noise_scheduler, device,
+                              ddim_steps=50, eta=0.0)
             gen = (gen.clamp(-1, 1) + 1) / 2
             grid = make_grid(gen, nrow=4)
             wandb.log({"val/samples": wandb.Image(grid, caption=f"Epoch {epoch + 1}"), "epoch": epoch + 1})
