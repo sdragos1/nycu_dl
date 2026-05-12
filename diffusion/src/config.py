@@ -32,6 +32,8 @@ class TrainConfig:
     run_name: str = "unet-42"
     wandb_project: str = "DL-DDPM"
     disable_wandb: bool = False
+    resume_ckpt: str | None = None
+    start_epoch: int = 0
 
 
 @dataclass

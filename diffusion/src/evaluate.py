@@ -20,7 +20,7 @@ def evaluate(model: nn.Module, scheduler: LinearNoiseScheduler, evaluator: Evalu
         for batch_idx, (images, labels_t) in enumerate(val_loader):
             labels_t = labels_t.to(device)
             samples = sample_ddim(model, labels_t, scheduler, device)
-            samples.clamp(min=-1, max=1)
+            samples = samples.clamp(min=-1, max=1)
             acc = evaluator.eval(samples, labels_t)
             accuracies.append(acc)
 

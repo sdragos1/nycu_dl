@@ -53,13 +53,17 @@ def main(cfg: DictConfig) -> None:
     scaler = torch.amp.GradScaler(device=str(device))
 
     print(f"Model parameters: {model_parameters_count(raw_model):,}")
-    wandb.watch(raw_model, log_freq=100, log='all')
 
-    step = 0
+    if getattr(t, "resume_ckpt", None):
+        print(f"Resuming from checkpoint: {t.resume_ckpt}")
+        raw_model.load_state_dict(torch.load(t.resume_ckpt, map_location=device))
+
     best_val_acc = 0.0
     evaluator = Evaluation(device)
 
-    for epoch in range(t.epochs):
+    start_epoch = getattr(t, "start_epoch", 0)
+
+    for epoch in range(start_epoch, t.epochs):
         model.train()
         epoch_loss = 0.0
 
@@ -89,6 +93,7 @@ def main(cfg: DictConfig) -> None:
             scaler.step(optimizer)
             scaler.update()
             total_grad_norm += grad_norm
+            epoch_loss += loss.item()
 
             for b_idx, ts in enumerate(timesteps_t.tolist()):
                 bucket = min(ts // bucket_size, num_buckets - 1)
@@ -101,7 +106,6 @@ def main(cfg: DictConfig) -> None:
                 "train/lr": optimizer.param_groups[0]['lr'],
                 "train/grad_norm": grad_norm,
                 "epoch": epoch + 1,
-                "step": step
             })
 
         avg_epoch_loss = epoch_loss / len(train_loader)
@@ -126,7 +130,7 @@ def main(cfg: DictConfig) -> None:
 
         val_acc = evaluate(model, noise_scheduler, evaluator, val_loader, device)
         print(f"Epoch {epoch + 1} Validation Accuracy: {val_acc:.4f}")
-        wandb.log({"val/val_acc": val_acc, "val/best_val_acc": best_val_acc, "epoch": epoch + 1, "step": step})
+        wandb.log({"val/val_acc": val_acc, "val/best_val_acc": best_val_acc, "epoch": epoch + 1})
 
         if val_acc > best_val_acc:
             print(f"Validation improved {best_val_acc:.4f} → {val_acc:.4f}. Saving model...")

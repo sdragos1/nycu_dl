@@ -36,8 +36,9 @@ class ICLEVRDataset(Dataset):
             fname = self.train_keys[idx]
             labels = self.train_data[fname]
             img_path = self.root / 'iclevr' / fname
-            image = Image.open(img_path).convert('RGB')
-            image_t = self.transform(image)
+            with Image.open(img_path) as image:
+                image = image.convert('RGB')
+                image_t = self.transform(image)
 
             indices = []
             for label in labels:

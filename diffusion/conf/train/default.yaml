@@ -14,3 +14,5 @@ save_dir: results/unet-42
 run_name: unet-42
 wandb_project: DL-DDPM
 disable_wandb: false
+resume_ckpt: null
+start_epoch: 0
