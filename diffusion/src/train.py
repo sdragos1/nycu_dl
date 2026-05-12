@@ -1,4 +1,5 @@
 import os
+import gc
 
 import hydra
 import torch
@@ -146,6 +147,9 @@ def main(cfg: DictConfig) -> None:
             gen = (gen.clamp(-1, 1) + 1) / 2
             grid = make_grid(gen, nrow=4)
             wandb.log({"val/samples": wandb.Image(grid, caption=f"Epoch {epoch + 1}"), "epoch": epoch + 1})
+
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

@@ -85,8 +85,8 @@ def train_val_data_loaders(batch_size: int = 32, root: Optional[Path | str] = No
 
     train_sub, val_sub = random_split(full_dataset, [train_size, val_size])
 
-    train_loader = torch.utils.data.DataLoader(train_sub, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_sub, batch_size=batch_size, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_sub, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(val_sub, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     return train_loader, val_loader
 
 
@@ -94,6 +94,6 @@ def test_data_loaders(batch_size: int = 32, root: Optional[Path | str] = None) -
     test_dataset = ICLEVRDataset("test", root=root)
     new_test_dataset = ICLEVRDataset("new_test", root=root)
 
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    new_test_loader = torch.utils.data.DataLoader(new_test_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    new_test_loader = torch.utils.data.DataLoader(new_test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     return test_loader, new_test_loader
