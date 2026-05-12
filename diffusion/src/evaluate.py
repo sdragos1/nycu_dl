@@ -6,12 +6,12 @@ from numpy import floating
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.evaluator import Evaluation
+from src.evaluator import evaluation_model
 from src.sample import sample_ddim
 from src.noise_scheduler import LinearNoiseScheduler
 
 
-def evaluate(model: nn.Module, scheduler: LinearNoiseScheduler, evaluator: Evaluation, val_loader: DataLoader,
+def evaluate(model: nn.Module, scheduler: LinearNoiseScheduler, evaluator: evaluation_model, val_loader: DataLoader,
              device: torch.device) -> floating[Any]:
     model.eval()
 

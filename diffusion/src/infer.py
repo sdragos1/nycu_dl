@@ -8,7 +8,7 @@ from src.ddpm.unet import UNet
 from src.iclevr_dataset import test_data_loaders, ICLEVRDataset
 from src.noise_scheduler import LinearNoiseScheduler
 from src.utils import get_device
-from src.evaluator import Evaluation
+from src.evaluator import evaluation_model
 from src.sample import sample
 
 @torch.no_grad()
@@ -65,7 +65,7 @@ def infer(cfg: DictConfig) -> None:
         model.load_state_dict(state_dict)
     model.eval()
     
-    evaluator = Evaluation(device=device)
+    evaluator = evaluation_model()
 
     print("Generating denoising process image...")
     objects = ICLEVRDataset(root=cfg.train.data_root or None).objects

@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from src.ddpm.unet import UNet
 from src.evaluate import evaluate
-from src.evaluator import Evaluation
+from src.evaluator import evaluation_model
 from src.iclevr_dataset import train_val_data_loaders
 from src.noise_scheduler import LinearNoiseScheduler
 from src.sample import sample_ddim
@@ -59,7 +59,7 @@ def main(cfg: DictConfig) -> None:
         raw_model.load_state_dict(torch.load(t.resume_ckpt, map_location=device))
 
     best_val_acc = 0.0
-    evaluator = Evaluation(device)
+    evaluator = evaluation_model()
 
     start_epoch = getattr(t, "start_epoch", 0)
 
